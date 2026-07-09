@@ -1,0 +1,12 @@
+name: agentic-framework
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - scikit-learn=1.8
+  - numpy
+  - pip
+  - pip:
+      - ollama
+      - requests
