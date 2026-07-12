@@ -1,4 +1,4 @@
-name: agentic-framework
+name: ai-framework
 channels:
   - conda-forge
   - defaults
@@ -9,4 +9,5 @@ dependencies:
   - pip
   - pip:
       - ollama
+      - mcp        
       - requests
