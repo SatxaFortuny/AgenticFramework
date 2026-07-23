@@ -1,24 +1,33 @@
-from adapters.local_tools import LocalToolRegistry
-from adapters.naive_retriever import NaiveRetriever
-from adapters.ollama_provider import OllamaProvider
-from core.types import RunContext
-from docs import DOCUMENTS
-from orchestrators.router import RouterOrchestrator
-from orchestrators.sequential import SequentialOrchestrator
+"""
+Thin convenience wrappers over core/factory.py's config-driven builder.
+Kept for backward compatibility with main.py / main_router.py / early
+eval runs -- but note these no longer hardcode any wiring themselves,
+they just point at a YAML file. The real entry point for new work is
+core/factory.build_pipeline_from_file() directly, or run.py.
+"""
+
+from pathlib import Path
+
+from core.factory import build_pipeline_from_file
+
+CONFIGS_DIR = Path(__file__).parent.parent / "configs"
 
 
 def build_default_pipeline():
-    model = OllamaProvider(model="llama3.2")
-    retriever = NaiveRetriever(DOCUMENTS)
-    orchestrator = SequentialOrchestrator(k=2)
-    context = RunContext(model=model, retriever=retriever)
-    return orchestrator, context
+    return build_pipeline_from_file(CONFIGS_DIR / "default.yaml")
 
 
 def build_router_pipeline():
-    model = OllamaProvider(model="llama3.2")
-    retriever = NaiveRetriever(DOCUMENTS)
-    tools = LocalToolRegistry(retriever=retriever)
-    orchestrator = RouterOrchestrator()
-    context = RunContext(model=model, tools=tools)
-    return orchestrator, context
+    return build_pipeline_from_file(CONFIGS_DIR / "router.yaml")
+
+
+def build_dense_rag_pipeline():
+    return build_pipeline_from_file(CONFIGS_DIR / "dense_rag.yaml")
+
+
+def build_cloud_pipeline():
+    return build_pipeline_from_file(CONFIGS_DIR / "cloud.yaml")
+
+
+def build_resilient_pipeline():
+    return build_pipeline_from_file(CONFIGS_DIR / "resilient.yaml")

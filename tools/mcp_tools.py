@@ -3,9 +3,18 @@ import asyncio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from core.interfaces import ToolProvider
+from core.interfaces import ToolProvider, Retriever
 from core.types import Tool, ToolResult, ToolSpec
 
+from typing import Literal
+from pydantic import BaseModel, Field
+
+class MCPToolsConfig(BaseModel):
+    type: Literal["mcp"]
+    command: str
+    args: list[str] = Field(default_factory=list)
+    def build(self, retriever: Retriever | None) -> ToolProvider:
+        return MCPToolProvider(command=self.command, args=self.args)
 
 class MCPToolProvider(ToolProvider):
     def __init__(self, command: str, args: list[str] | None = None):

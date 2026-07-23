@@ -1,7 +1,17 @@
 from datetime import datetime, timezone
+from typing import Literal
+
+from pydantic import BaseModel
 
 from core.interfaces import Retriever, ToolProvider
 from core.types import Tool, ToolResult, ToolSpec
+
+
+class LocalToolsConfig(BaseModel):
+    type: Literal["local"]
+
+    def build(self, retriever: Retriever | None) -> ToolProvider:
+        return LocalToolRegistry(retriever=retriever)
 
 
 def _make_search_docs_tool(retriever: Retriever) -> Tool:
@@ -10,7 +20,12 @@ def _make_search_docs_tool(retriever: Retriever) -> Tool:
         chunks = retriever.retrieve(query, k=2)
         if not chunks:
             return "No relevant documentation found."
-        return "\n\n".join(f"--- {c.title} ---\n{c.text.strip()}" for c in chunks)
+
+        parts = []
+        for chunk in chunks:
+            title = chunk.metadata.get("title", "Untitled")
+            parts.append(f"--- {title} ---\n{chunk.content.strip()}")
+        return "\n\n".join(parts)
 
     return Tool(
         spec=ToolSpec(

@@ -1,0 +1,25 @@
+# Two models, two jobs: Groq (fast/cheap) decides which tool to call,
+# Gemini (stronger) synthesizes the final answer from the tool results.
+# Requires GROQ_API_KEY and GEMINI_API_KEY set in the environment.
+model_provider:
+  type: groq
+  model: qwen/qwen3.6-27b
+worker_model_provider:
+  type: gemini
+  model: models/gemini-3.5-flash
+chunker:
+  type: paragraph        # used internally by the search_fetchly_docs tool
+  chunk_size: 1000
+  overlap: 200
+embedder:
+  type: ollama
+  model: nomic-embed-text
+vectordb:
+  type: chroma
+  collection_name: fetchly_docs
+  persist_directory: ./chroma_db
+orchestrator:
+  type: router
+  prompt_version: router_v2
+tools:
+  type: local

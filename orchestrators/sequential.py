@@ -1,18 +1,31 @@
-from core.interfaces import Orchestrator
-from core.types import RunContext, RunResult
-
-SYSTEM_PROMPT = """You are a documentation assistant for the Fetchly HTTP \
-client library. Answer the user's question using ONLY the provided \
-documentation excerpts below. If the excerpts don't contain the answer, \
-say so explicitly rather than guessing.
+"""
+Simplest possible Orchestrator: retrieve, then generate, once.
 """
 
+from core.interfaces import Orchestrator
+from core.prompts import DEFAULT_SEQUENTIAL_PROMPT_VERSION, get_prompt
+from core.types import RunContext, RunResult
+
+from typing import Literal
+from pydantic import BaseModel
+
+class SequentialOrchestratorConfig(BaseModel):
+    type: Literal["sequential"]
+    k: int | None = None
+    prompt_version: str | None = None
+    
+    def build(self):
+        # Exclude 'type' and any null values, pass the rest directly as kwargs
+        kwargs = self.model_dump(exclude={"type"}, exclude_none=True)
+        return SequentialOrchestrator(**kwargs)
 
 class SequentialOrchestrator(Orchestrator):
-    def __init__(self, k: int = 2):
+    def __init__(self, k: int = 2, prompt_version: str = DEFAULT_SEQUENTIAL_PROMPT_VERSION):
         self.k = k
+        self.prompt_version = prompt_version
 
     def run(self, query: str, context: RunContext) -> RunResult:
+        system_prompt = get_prompt(self.prompt_version)
         chunks = context.retriever.retrieve(query, k=self.k)
 
         if not chunks:
@@ -23,7 +36,7 @@ class SequentialOrchestrator(Orchestrator):
             )
 
         user_message = f"Documentation excerpts:\n\n{context_text}\n\nQuestion: {query}"
-        response = context.model.generate(SYSTEM_PROMPT, user_message)
+        response = context.model.generate(system_prompt, user_message)
 
         trace = [
             {
@@ -35,7 +48,8 @@ class SequentialOrchestrator(Orchestrator):
             },
             {
                 "step": "generate",
-                "system_prompt": SYSTEM_PROMPT,
+                "prompt_version": self.prompt_version,
+                "system_prompt": system_prompt,
                 "user_message": user_message,
             },
         ]

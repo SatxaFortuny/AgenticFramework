@@ -4,6 +4,15 @@ from sklearn.metrics.pairwise import cosine_similarity
 from core.interfaces import Retriever
 from core.types import ScoredChunk
 
+from typing import Literal
+from pydantic import BaseModel
+
+from docs import DOCUMENTS
+
+class NaiveRetrieverConfig(BaseModel):
+    type: Literal["naive"]
+    def build(self) -> Retriever:
+        return NaiveRetriever(DOCUMENTS)
 
 class NaiveRetriever(Retriever):
     def __init__(self, documents: list[dict]):

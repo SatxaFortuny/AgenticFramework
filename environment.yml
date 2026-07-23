@@ -1,4 +1,4 @@
-name: ai-framework
+name: agentic-framework
 channels:
   - conda-forge
   - defaults
@@ -8,6 +8,12 @@ dependencies:
   - numpy
   - pip
   - pip:
-      - ollama
-      - mcp        
+      - ollama          # local model + embeddings backend
+      - groq            # cloud model backend (optional, needs GROQ_API_KEY)
+      - google-genai    # cloud model backend (optional, needs GEMINI_API_KEY)
+      - mcp             # MCPToolProvider adapter (optional, needs a real MCP server)
       - requests
+      - pyyaml          # config-driven composition (Phase 4)
+      - python-dotenv   # loads .env automatically in run.py / eval runner
+      - pytest          # contract test suite (Phase 6)
+      - chromadb
