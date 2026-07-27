@@ -1,20 +1,20 @@
+"""Generic MCP client ToolProvider.
+
+One MCPToolProvider instance = one connection to one MCP server. It
+has no opinion about *which* server -- that's decided by
+tools/configs/mcp_servers.yaml (the shared directory of servers the
+framework knows how to reach) plus an app's manifest (which of those
+servers that app is allowed to use).
+"""
+
 import asyncio
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from core.interfaces import ToolProvider, Retriever
+from core.interfaces import ToolProvider
 from core.types import Tool, ToolResult, ToolSpec
 
-from typing import Literal
-from pydantic import BaseModel, Field
-
-class MCPToolsConfig(BaseModel):
-    type: Literal["mcp"]
-    command: str
-    args: list[str] = Field(default_factory=list)
-    def build(self, retriever: Retriever | None) -> ToolProvider:
-        return MCPToolProvider(command=self.command, args=self.args)
 
 class MCPToolProvider(ToolProvider):
     def __init__(self, command: str, args: list[str] | None = None):

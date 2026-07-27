@@ -10,6 +10,7 @@ from models import (
     FallbackConfig,
     GeminiConfig,
     GroqConfig,
+    OllamaConfig,
 )
 from orchestrators import RouterOrchestratorConfig, SequentialOrchestratorConfig
 from rag import (
@@ -17,34 +18,24 @@ from rag import (
     OllamaEmbedderConfig,
     ChromaVectorConfig,
 )
-from tools import LocalToolsConfig, MCPToolsConfig
-
+from tools import build_tool_provider
 
 ModelConfigType = Annotated[
-    Union[GroqConfig, GeminiConfig, FallbackConfig],
+    Union[GroqConfig, GeminiConfig, FallbackConfig, OllamaConfig],
     Field(discriminator="type")
 ]
-
-ToolConfigType = Annotated[
-    Union[LocalToolsConfig, MCPToolsConfig],
-    Field(discriminator="type")
-]
-
 OrchestratorConfigType = Annotated[
     Union[SequentialOrchestratorConfig, RouterOrchestratorConfig],
     Field(discriminator="type")
 ]
-
 EmbedderConfigType = Annotated[
     Union[OllamaEmbedderConfig],
     Field(discriminator="type")
 ]
-
 VectorStoreConfigType = Annotated[
     Union[ChromaVectorConfig],
     Field(discriminator="type")
 ]
-
 ChunkerConfigType = Annotated[
     Union[ParagraphChunkerConfig],
     Field(discriminator="type")
@@ -53,6 +44,7 @@ ChunkerConfigType = Annotated[
 
 class Rag(Retriever):
     """The orchestrator that wires the RAG components together."""
+
     def __init__(
         self,
         chunker: Chunker,
@@ -69,7 +61,6 @@ class Rag(Retriever):
         chunks = self.chunker.chunk(text, metadata)
         if not chunks:
             return
-
         texts = [chunk.content for chunk in chunks]
         embeddings = self.embedder.embed(texts)
         self.vector_store.add(chunks, embeddings)
@@ -85,16 +76,21 @@ class PipelineConfig(BaseModel):
     embedder: EmbedderConfigType
     vectordb: VectorStoreConfigType
     chunker: ChunkerConfigType
-    tools: ToolConfigType | None = None
+    # References an app_id -- resolved against tools/configs/apps/<app_id>.yaml
+    # by tools.build_tool_provider(). The pipeline config no longer declares
+    # tool *implementations* directly; it only says which app's manifest to load,
+    # so tool access stays governed centrally in tools/configs/.
+    tools: str | None = None
     orchestrator: OrchestratorConfigType
+
 
 FallbackConfig.model_rebuild(_types_namespace={"ModelConfigType": ModelConfigType})
 PipelineConfig.model_rebuild()
 
+
 # ==========================================
 # 3. Factory Build Functions
 # ==========================================
-
 def build_pipeline_from_config(config_dict: dict):
     # 1. Pydantic validates the dictionary and converts it into strongly-typed objects
     config = PipelineConfig.model_validate(config_dict)
@@ -111,14 +107,20 @@ def build_pipeline_from_config(config_dict: dict):
     vector_store = config.vectordb.build()
     retriever = Rag(chunker=chunker, embedder=embedder, vector_store=vector_store)
 
-    tools = config.tools.build(retriever) if config.tools else None
+    # config.tools is an app_id; build_tool_provider resolves it against that
+    # app's manifest (tools/configs/apps/<app_id>.yaml) and returns a
+    # ToolProvider scoped to exactly the local tools and MCP servers granted
+    # to that app.
+    tools = build_tool_provider(config.tools, retriever) if config.tools else None
+
     orchestrator = config.orchestrator.build()
 
     # 3. Assemble and return
     context = RunContext(model=model, worker_model=worker_model, retriever=retriever, tools=tools)
     return orchestrator, context
 
+
 def build_pipeline_from_file(path: str | Path):
     with open(path) as f:
         config_dict = yaml.safe_load(f)
-    return build_pipeline_from_config(config_dict)
+    return build_pipeline_from_config(config_dict)    

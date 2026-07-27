@@ -1,0 +1,12 @@
+# Tool access manifest for the 'fetchly_docs' app.
+# Only what's listed here is reachable by this app -- see
+# tools/local/catalog.py for valid local_tools keys and
+# tools/configs/mcp_servers.yaml for valid mcp_servers names.
+
+app_id: fetchly_docs
+
+local_tools:
+  - shared.get_current_time
+  - apps.fetchly_docs.search_fetchly_docs
+
+mcp_servers: []

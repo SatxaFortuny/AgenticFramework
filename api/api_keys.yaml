@@ -1,0 +1,7 @@
+# api_key -> which app owns it, and which pipeline config that app runs.
+# In prod: move this to a DB table (api_key_hash, app_id, config_path, revoked_at, ...)
+# and hash the keys. Kept as flat yaml here to mirror how run.py picks configs.
+
+sk-fetchly-demo-key-123:
+  app_id: fetchly_docs
+  config_path: configs/groq_router_gemini_worker.yaml

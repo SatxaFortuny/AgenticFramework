@@ -1,0 +1,15 @@
+# Central directory of MCP servers this framework knows how to reach.
+# Apps don't configure command/args themselves -- they reference a
+# server by name in their manifest (tools/configs/apps/<app_id>.yaml),
+# which keeps connection details in one shared, auditable place.
+#
+# Example:
+# servers:
+#   filesystem:
+#     command: npx
+#     args: ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+#   zendesk:
+#     command: python
+#     args: ["-m", "mcp_zendesk_server"]
+
+servers: {}

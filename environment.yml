@@ -17,3 +17,5 @@ dependencies:
       - python-dotenv   # loads .env automatically in run.py / eval runner
       - pytest          # contract test suite (Phase 6)
       - chromadb
+      - fastapi         # conversations API (POST /conversations, /messages)
+      - uvicorn[standard]  # ASGI server to run the API
