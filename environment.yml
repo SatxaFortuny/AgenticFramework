@@ -1,0 +1,14 @@
+name: af
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - langgraph
+      - langchain-ollama
+      - langchain-chroma
+      - pydantic
+      - pydantic-settings
+      - pyyaml
