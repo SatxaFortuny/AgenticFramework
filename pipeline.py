@@ -4,7 +4,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langchain_ollama import ChatOllama
 import uuid
 from IModel import IModel, State
-from model_ollama import ModelOllama
+from ModelOllama import ModelOllama
 
 # In order to dynamically choose the model, I have to wrap the node function. That is because the node function only accepts state as an argument.
 def create_node(model: IModel):
