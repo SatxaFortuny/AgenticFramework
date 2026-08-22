@@ -3,25 +3,23 @@ from langgraph.graph import StateGraph, MessagesState, START
 from langgraph.checkpoint.memory import InMemorySaver
 from langchain_ollama import ChatOllama
 import uuid
+from IModel import IModel, State
+from model_ollama import ModelOllama
 
-llm = ChatOllama(
-    model="llama3.1:8b",
-    temperature=0.5
-)
-
-# The metadata of the conversation
-class State(MessagesState):
-    extra_field: int
-   
-# The action 
-def node(state: State):
-    messages = state["messages"]
-    response = llm.invoke(messages)
-    return {"messages": [response], "extra_field": 10}
+# In order to dynamically choose the model, I have to wrap the node function. That is because the node function only accepts state as an argument.
+def create_node(model: IModel):
+    def node(state: State):
+        response = model.generate(state)
+        return {"messages": [response], "extra_field": 10}
+    return node
+    
+# Models initialization
+ollama = ModelOllama(model_name="llama3.1:8b")
     
 # The graph builder
 builder = StateGraph(State)
-builder.add_node("node1", node)
+ollama_node = create_node(ollama)
+builder.add_node("node1", ollama_node)
 builder.add_edge(START, "node1")
 
 # The checkpointer is the one that saves the state
