@@ -11,4 +11,4 @@ dependencies:
       - langchain-chroma
       - pydantic
       - pydantic-settings
-      - pyyaml
+      - langchain-mcp-adapters
