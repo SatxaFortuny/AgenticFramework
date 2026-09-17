@@ -1,7 +1,7 @@
-import yaml
 from pathlib import Path
+
+import yaml
 from pydantic import BaseModel
-from typing import List, Dict, Optional
 
 # --- TIER 2: Graph Blueprint Schemas ---
 
@@ -13,14 +13,14 @@ class EdgeDef(BaseModel):
     source: str
     target: str
     is_conditional: bool = False
-    condition_action: Optional[str] = None
+    condition_action: str | None = None
 
 class GraphBlueprint(BaseModel):
     name: str
     functionality_ref: str
     entry_point: str
-    nodes: List[NodeDef]
-    edges: List[EdgeDef]
+    nodes: list[NodeDef]
+    edges: list[EdgeDef]
 
 # --- TIER 1: Infrastructure & Security Schemas ---
 
@@ -36,19 +36,19 @@ class MCPServerConfig(BaseModel):
     server_name: str
     url: str
     transport: str = "sse"
-    allowed_tools: List[str]
+    allowed_tools: list[str]
 
 class ModelsConfig(BaseModel):
     provider: str
     model_name: str
 
 class FunctionalityConfig(BaseModel):
-    vectordb: List[VectorDBConfig] = []
-    tools: List[MCPServerConfig] = []
-    models: List[ModelsConfig]
+    vectordb: list[VectorDBConfig] = []
+    tools: list[MCPServerConfig] = []
+    models: list[ModelsConfig]
 
 class AppConfig(BaseModel):
-    functionalities: Dict[str, FunctionalityConfig]
+    functionalities: dict[str, FunctionalityConfig]
 
 # --- Config Loaders ---
 

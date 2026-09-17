@@ -1,8 +1,8 @@
+import uvicorn
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.routing import Mount
-import uvicorn
 
 mcp = FastMCP(
     "FinanceServer",

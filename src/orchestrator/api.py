@@ -1,12 +1,12 @@
 import logging
 import sys
 
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import uvicorn
 
-from core.schemas import load_app_config, load_blueprint
 from core.pipeline import create_pipeline
+from core.schemas import load_app_config, load_blueprint
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 logger = logging.getLogger("orchestrator")

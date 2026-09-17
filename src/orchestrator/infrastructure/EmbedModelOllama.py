@@ -1,5 +1,7 @@
-from core.IEmbeddingModel import IEmbeddingModel
 import ollama
+
+from core.IEmbeddingModel import IEmbeddingModel
+
 
 class EmbedModelOllama(IEmbeddingModel):
     

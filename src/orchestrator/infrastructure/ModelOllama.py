@@ -1,6 +1,8 @@
-from core.IModel import IModel, State
-from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage
+from langchain_ollama import ChatOllama
+
+from core.IModel import IModel, State
+
 
 class ModelOllama(IModel):
     
@@ -15,7 +17,7 @@ class ModelOllama(IModel):
         if tools:
             self.llm = self.llm.bind_tools(tools)
 
-    def generate(self, state: State, context_id: str = None):
+    def generate(self, state: State, context_id: str | None = None):
         
         messages = state["messages"]
         context = state.get("context", {})

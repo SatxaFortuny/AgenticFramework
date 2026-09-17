@@ -1,17 +1,18 @@
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from core.IEmbeddingModel import IEmbeddingModel
+
 # Abstract Interfaces
 from core.IModel import IModel
 from core.IVectorDB import IVectorDB
-from core.IEmbeddingModel import IEmbeddingModel
 
 # Pydantic Schemas
-from core.schemas import ModelsConfig, VectorDBConfig, FunctionalityConfig
+from core.schemas import FunctionalityConfig, ModelsConfig, VectorDBConfig
+from infrastructure.ChromaDB import ChromaDB
+from infrastructure.EmbedModelOllama import EmbedModelOllama
 
 # Concrete Infrastructure Classes
 from infrastructure.ModelOllama import ModelOllama
-from infrastructure.ChromaDB import ChromaDB
-from infrastructure.EmbedModelOllama import EmbedModelOllama
 
 MODEL_REGISTRY = {
     "ollama": ModelOllama

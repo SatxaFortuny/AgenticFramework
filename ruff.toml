@@ -1,0 +1,15 @@
+target-version = "py311"
+
+[lint]
+# N999 flags module filenames like IModel.py / ChromaDB.py as invalid.
+# That's a deliberate convention here (interfaces prefixed with I, classes
+# named after what they wrap), not a mistake - so it's ignored rather than
+# renaming every file and updating every import across the project.
+ignore = ["N999"]
+
+[lint.isort]
+# core/ and infrastructure/ are this project's own packages (under
+# src/orchestrator/), not third-party. Without this, isort's first-party
+# detection can guess differently depending on the machine/ruff version
+# and working directory, sorting these imports inconsistently.
+known-first-party = ["core", "infrastructure"]

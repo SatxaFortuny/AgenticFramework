@@ -1,5 +1,7 @@
-from langgraph.graph import MessagesState
 from abc import ABC, abstractmethod
+
+from langgraph.graph import MessagesState
+
 
 # The metadata of the conversation
 class State(MessagesState):
@@ -13,5 +15,5 @@ class IModel(ABC):
         pass
         
     @abstractmethod
-    def generate(self, state: State, context_id: str = None):
+    def generate(self, state: State, context_id: str | None = None):
         pass

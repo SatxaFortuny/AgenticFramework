@@ -1,6 +1,8 @@
-from core.IVectorDB import IVectorDB
-import chromadb
 import os
+
+import chromadb
+
+from core.IVectorDB import IVectorDB
 
 """
 Structural note: by default chromadb has its own internal chunking/embedding
