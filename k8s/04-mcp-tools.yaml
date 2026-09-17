@@ -1,0 +1,71 @@
+# Weather MCP Deployment & Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: weather-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: weather-mcp
+  template:
+    metadata:
+      labels:
+        app: weather-mcp
+    spec:
+      containers:
+        - name: weather-mcp
+          image: localhost/af-tools:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SERVER_SCRIPT
+              value: "weather_server.py"
+          ports:
+            - containerPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: weather-mcp-service
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+  selector:
+    app: weather-mcp
+---
+# Finance MCP Deployment & Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finance-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: finance-mcp
+  template:
+    metadata:
+      labels:
+        app: finance-mcp
+    spec:
+      containers:
+        - name: finance-mcp
+          image: localhost/af-tools:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SERVER_SCRIPT
+              value: "finance_server.py"
+          ports:
+            - containerPort: 8001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: finance-mcp-service
+spec:
+  ports:
+    - port: 8001
+      targetPort: 8001
+  selector:
+    app: finance-mcp

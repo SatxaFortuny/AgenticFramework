@@ -1,0 +1,24 @@
+functionalities:
+    greeting_bot:
+        vectordb:
+            - provider: "chromadb"
+              collection_name: "general_knowledge"
+        tools:
+            - server_name: "weather_mcp"
+              url: "http://weather-mcp-service:8000/sse"
+              allowed_tools: ["get_weather"]
+        models:
+            - provider: "ollama"
+              model_name: "llama3.1:8b"
+      
+    finance_bot:
+        vectordb:
+            - provider: "chromadb"
+              collection_name: "financial_reports"
+        tools:
+            - server_name: "finance_mcp"
+              url: "http://finance-mcp-service:8001/sse"
+              allowed_tools: ["sql_read", "sql_write"]
+        models:
+            - provider: "ollama"
+              model_name: "llama3.1:8b"

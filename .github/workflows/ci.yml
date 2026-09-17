@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install orchestrator dependencies
+        run: |
+          pip install -r src/orchestrator/requirements.txt
+          pip install ruff pytest
+
+      - name: Lint
+        run: ruff check src/
+
+      - name: Run unit tests (skips anything marked 'integration')
+        run: pytest -m "not integration"
+
+  build-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build orchestrator image
+        run: docker build -t af-orchestrator:ci ./src/orchestrator
+
+      - name: Build tools image
+        run: docker build -t af-tools:ci ./src/tools
+
+      - name: Build chromadb image
+        run: docker build -t af-chroma:ci -f ./src/orchestrator/infrastructure/Dockerfile.chroma ./src/orchestrator/infrastructure

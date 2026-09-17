@@ -1,0 +1,10 @@
+FROM python:3.11-slim
+
+WORKDIR /chroma
+
+RUN pip install --no-cache-dir "numpy<2.0.0" chromadb==0.4.24
+
+EXPOSE 8000
+
+# Run natively (will run as container-root, mapped safely by Podman)
+CMD ["chroma", "run", "--host", "0.0.0.0", "--port", "8000", "--path", "/chroma/chroma"]

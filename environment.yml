@@ -1,14 +1,23 @@
 name: af
 channels:
-  - conda-forge
-  - defaults
+    - conda-forge
+    - defaults
 dependencies:
-  - python=3.11
-  - pip
-  - pip:
-      - langgraph
-      - langchain-ollama
-      - langchain-chroma
-      - pydantic
-      - pydantic-settings
-      - langchain-mcp-adapters
+    - python=3.11
+    - pip
+    - pip:
+        - fastapi
+        - uvicorn
+        - starlette
+        - httpx
+        - langgraph
+        - langchain-core
+        - langchain-ollama
+        - mcp
+        - langchain-mcp-adapters
+        - chromadb
+        - pydantic
+        - pydantic-settings
+        - pyyaml
+        - pytest
+        - ruff

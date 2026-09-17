@@ -1,4 +1,4 @@
-from IEmbeddingModel import IEmbeddingModel
+from core.IEmbeddingModel import IEmbeddingModel
 import ollama
 
 class EmbedModelOllama(IEmbeddingModel):
