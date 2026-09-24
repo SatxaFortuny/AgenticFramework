@@ -3,9 +3,12 @@ functionalities:
         vectordb:
             - provider: "chromadb"
               collection_name: "general_knowledge"
+              embedding_provider: "ollama"
         tools:
             - server_name: "weather_mcp"
-              url: "http://weather-mcp-service:8000/sse"
+              # In-cluster default is the k8s Service DNS name. Override locally
+              # with: export WEATHER_MCP_URL="http://localhost:9000/sse"
+              url: "${WEATHER_MCP_URL:-http://weather-mcp-service:8000/sse}"
               allowed_tools: ["get_weather"]
         models:
             - provider: "ollama"
@@ -15,9 +18,11 @@ functionalities:
         vectordb:
             - provider: "chromadb"
               collection_name: "financial_reports"
+              embedding_provider: "ollama"
         tools:
             - server_name: "finance_mcp"
-              url: "http://finance-mcp-service:8001/sse"
+              # export FINANCE_MCP_URL="http://localhost:9001/sse" to override locally
+              url: "${FINANCE_MCP_URL:-http://finance-mcp-service:8001/sse}"
               allowed_tools: ["sql_read", "sql_write"]
         models:
             - provider: "ollama"

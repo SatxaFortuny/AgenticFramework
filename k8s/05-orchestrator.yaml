@@ -38,6 +38,8 @@ spec:
               value: "chromadb-service"
             - name: CHROMA_PORT
               value: "8000"
+            - name: LOG_LEVEL
+              value: "INFO"
           volumeMounts:
             - name: config-volume
               mountPath: /app/configs
