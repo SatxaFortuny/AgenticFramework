@@ -1,0 +1,18 @@
+name: "greeting_bot_graph"
+functionality_ref: "greeting_bot"
+entry_point: "agent"
+
+nodes:
+  - id: "agent"
+    action: "call_llm"
+  - id: "tools"
+    action: "execute_tools"
+
+edges:
+  - source: "agent"
+    target: "tools"
+    is_conditional: true
+    condition_action: "should_continue"
+  - source: "tools"
+    target: "agent"
+    is_conditional: false

@@ -1,5 +1,5 @@
-name: "greeting_bot_graph"
-functionality_ref: "greeting_bot"
+name: "finance_bot_graph"
+functionality_ref: "finance_bot"
 entry_point: "agent"
 
 nodes:

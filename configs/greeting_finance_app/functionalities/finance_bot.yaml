@@ -1,0 +1,11 @@
+vectordb:
+  - provider: "chromadb"
+    collection_name: "financial_reports"
+    embedding_provider: "ollama"
+tools:
+  - server_name: "finance_mcp"
+    # export FINANCE_MCP_URL="http://localhost:9001/sse" to override locally
+    url: "${FINANCE_MCP_URL:-http://finance-mcp-service:8001/sse}"
+    allowed_tools: ["sql_read", "sql_write"]
+# No `models` here on purpose: this functionality inherits the app's
+# default model (ollama / llama3.1:8b, see app.yaml) instead of repeating it.

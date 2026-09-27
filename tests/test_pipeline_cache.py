@@ -1,12 +1,9 @@
 """
 Unit tests for the pipeline cache in core/pipeline.py. These stub out
 _build_pipeline entirely (no LLM/MCP/vectordb calls), so they only check the
-caching contract: same config -> cache hit (no rebuild), changed config ->
-rebuild, and the functionality_ref allowlist check still happens up front.
-
-Note: written with asyncio.run() rather than pytest-asyncio, since the
-project doesn't currently depend on that plugin - avoids adding a new
-dependency just for these three tests.
+caching contract: same (app, config) -> cache hit, changed config -> rebuild,
+two apps with the same functionality name don't collide, and the
+functionality_ref allowlist check still happens up front.
 """
 import asyncio
 import sys
@@ -73,8 +70,8 @@ def test_second_call_is_a_cache_hit(monkeypatch):
     async def run():
         blueprint = make_blueprint()
         app_config = make_app_config()
-        graph1 = await get_or_create_pipeline(blueprint, app_config)
-        graph2 = await get_or_create_pipeline(blueprint, app_config)
+        graph1 = await get_or_create_pipeline("greeting_finance_app", blueprint, app_config)
+        graph2 = await get_or_create_pipeline("greeting_finance_app", blueprint, app_config)
         return graph1, graph2
 
     graph1, graph2 = asyncio.run(run())
@@ -93,14 +90,50 @@ def test_config_change_invalidates_cache(monkeypatch):
 
     async def run():
         blueprint = make_blueprint()
-        graph1 = await get_or_create_pipeline(blueprint, make_app_config("llama3.1:8b"))
-        graph2 = await get_or_create_pipeline(blueprint, make_app_config("llama3.1:70b"))
+        graph1 = await get_or_create_pipeline(
+            "greeting_finance_app", blueprint, make_app_config("llama3.1:8b")
+        )
+        graph2 = await get_or_create_pipeline(
+            "greeting_finance_app", blueprint, make_app_config("llama3.1:70b")
+        )
         return graph1, graph2
 
     graph1, graph2 = asyncio.run(run())
 
     assert graph1 is not graph2
     assert build_calls == ["llama3.1:8b", "llama3.1:70b"]
+
+
+def test_different_apps_with_same_functionality_name_do_not_collide(monkeypatch):
+    """The exact bug the app_name cache key exists to prevent: two apps that
+    both happen to define a functionality called 'greeting_bot', with
+    different configs, must not share a cache entry."""
+    build_calls = []
+    monkeypatch.setattr(
+        pipeline_module,
+        "_build_pipeline",
+        lambda bp, cfg: _fake_build_pipeline(bp, cfg, build_calls),
+    )
+
+    async def run():
+        blueprint = make_blueprint()
+        graph_app1 = await get_or_create_pipeline(
+            "app_one", blueprint, make_app_config("llama3.1:8b")
+        )
+        graph_app2 = await get_or_create_pipeline(
+            "app_two", blueprint, make_app_config("llama3.1:8b")
+        )
+        # Same app again - should be a cache hit, not a third build.
+        graph_app1_again = await get_or_create_pipeline(
+            "app_one", blueprint, make_app_config("llama3.1:8b")
+        )
+        return graph_app1, graph_app2, graph_app1_again
+
+    graph_app1, graph_app2, graph_app1_again = asyncio.run(run())
+
+    assert graph_app1 is not graph_app2
+    assert graph_app1 is graph_app1_again
+    assert build_calls == ["llama3.1:8b", "llama3.1:8b"]  # built once per app, not per call
 
 
 def test_unauthorized_functionality_ref_raises_without_building(monkeypatch):
@@ -120,7 +153,7 @@ def test_unauthorized_functionality_ref_raises_without_building(monkeypatch):
     )
 
     async def run():
-        await get_or_create_pipeline(blueprint, make_app_config())
+        await get_or_create_pipeline("greeting_finance_app", blueprint, make_app_config())
 
     with pytest.raises(ValueError, match="Security Block"):
         asyncio.run(run())

@@ -8,6 +8,12 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
+try:
+    # Current langgraph versions.
+    from langgraph.checkpoint.memory import InMemorySaver
+except ImportError:  # pragma: no cover - older langgraph versions
+    from langgraph.checkpoint.memory import MemorySaver as InMemorySaver
+
 from core.factory import (
     create_embedder,
     create_model,
@@ -19,6 +25,21 @@ from core.logging_utils import elapsed_ms, preview
 from core.schemas import AppConfig, FunctionalityConfig, GraphBlueprint
 
 logger = logging.getLogger(__name__)
+
+# CHANGED: one process-wide checkpointer, shared across every compiled graph
+# (all functionalities, all apps). This is safe because LangGraph namespaces
+# saved state by thread_id, not by which graph object called it - so as long
+# as api.py always passes the request's conversation_id as thread_id, two
+# different functionalities (or apps) never see each other's history even
+# though they share this one checkpointer instance.
+#
+# InMemorySaver does not persist across a restart and does not work across
+# multiple orchestrator replicas (same limitation as InMemorySessionStore in
+# core/session_store.py, for the same reason: it's an in-process dict).
+# Swap for a Postgres/Redis-backed checkpointer when that starts to matter -
+# nothing else in this module needs to change, since _build_pipeline is the
+# only place that references it.
+_checkpointer = InMemorySaver()
 
 
 # --- Standard Edge Conditions ---
@@ -44,7 +65,6 @@ def _timed_node(node_id: str, fn):
         try:
             result = fn(state)
         except Exception as exc:
-            # No traceback here: api.py logs it once when the error surfaces.
             logger.error(
                 "Node '%s' failed after %.0f ms: %s", node_id, elapsed_ms(start), exc
             )
@@ -86,28 +106,21 @@ def _timed_tool_node(node_id: str, tool_node: ToolNode):
 
 # --- Pipeline cache ---
 #
-# CHANGED: create_pipeline() used to be called fresh on every /chat request,
-# which meant re-running MCP tool discovery (a network round-trip to every
-# configured MCP server) and re-instantiating the model/vectordb/embedder
-# clients every single time. That's wasted latency and unnecessary load on
-# the MCP servers. Compiled graphs are now cached per functionality_ref and
-# reused across requests.
-#
-# The cache key is a hash of the blueprint + the functionality's Tier 1
-# config, so an edited config.yaml/blueprint.yaml (e.g. via a ConfigMap
-# reload) invalidates the cache and triggers a rebuild on the next request,
-# without needing a service restart.
-#
-# A per-functionality asyncio.Lock prevents a "thundering herd": if several
-# requests for the same (cold) functionality arrive concurrently, only the
-# first builds the pipeline; the rest wait for it and reuse the result
-# instead of each independently doing MCP discovery + model init.
-_pipeline_cache: dict[str, tuple[str, object]] = {}
-_pipeline_locks: dict[str, asyncio.Lock] = {}
+# CHANGED: the cache is now keyed by (app_name, functionality_ref), not just
+# functionality_ref. Before multi-app support, two different apps could not
+# both define a "greeting_bot" functionality without colliding in this cache
+# - one app's compiled graph would silently serve the other app's requests.
+# The cache VALUE's hash payload also now includes app_name, so a config
+# change in one app never accidentally invalidates another app's cache entry
+# purely from a hash coincidence (astronomically unlikely, but the app_name
+# key already makes that moot).
+_pipeline_cache: dict[tuple[str, str], tuple[str, object]] = {}
+_pipeline_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
 
-def _cache_key(blueprint: GraphBlueprint, tier1_limits: FunctionalityConfig) -> str:
+def _cache_key(app_name: str, blueprint: GraphBlueprint, tier1_limits: FunctionalityConfig) -> str:
     payload = {
+        "app_name": app_name,
         "blueprint": blueprint.model_dump(),
         "tier1_limits": tier1_limits.model_dump(),
     }
@@ -121,11 +134,15 @@ def clear_pipeline_cache() -> None:
     _pipeline_cache.clear()
 
 
-async def get_or_create_pipeline(blueprint: GraphBlueprint, app_config: AppConfig):
+async def get_or_create_pipeline(
+    app_name: str, blueprint: GraphBlueprint, app_config: AppConfig
+):
     """
     Public entry point for api.py. Returns a cached compiled graph for this
-    functionality when the config hasn't changed, otherwise builds (and
-    caches) a fresh one.
+    (app_name, functionality) when the config hasn't changed, otherwise builds
+    (and caches) a fresh one. `app_name` disambiguates the cache: it's the
+    resolved app's name (from AppBundle.meta.name / discover_apps()), not
+    anything the caller invents.
     """
     if blueprint.functionality_ref not in app_config.functionalities:
         raise ValueError(
@@ -134,29 +151,31 @@ async def get_or_create_pipeline(blueprint: GraphBlueprint, app_config: AppConfi
 
     functionality_ref = blueprint.functionality_ref
     tier1_limits = app_config.functionalities[functionality_ref]
-    cache_key = _cache_key(blueprint, tier1_limits)
+    cache_key = _cache_key(app_name, blueprint, tier1_limits)
+    entry_key = (app_name, functionality_ref)
 
-    cached = _pipeline_cache.get(functionality_ref)
+    cached = _pipeline_cache.get(entry_key)
     if cached is not None and cached[0] == cache_key:
-        logger.debug("Pipeline cache hit for '%s'", functionality_ref)
+        logger.debug("Pipeline cache hit for '%s/%s'", app_name, functionality_ref)
         return cached[1]
 
-    lock = _pipeline_locks.setdefault(functionality_ref, asyncio.Lock())
+    lock = _pipeline_locks.setdefault(entry_key, asyncio.Lock())
     async with lock:
-        # Re-check inside the lock: another request may have already built
-        # (and cached) this exact pipeline while we were waiting for the lock.
-        cached = _pipeline_cache.get(functionality_ref)
+        cached = _pipeline_cache.get(entry_key)
         if cached is not None and cached[0] == cache_key:
-            logger.debug("Pipeline cache hit for '%s' (post-lock)", functionality_ref)
+            logger.debug(
+                "Pipeline cache hit for '%s/%s' (post-lock)", app_name, functionality_ref
+            )
             return cached[1]
 
         if cached is not None:
             logger.info(
-                "Pipeline cache stale for '%s' (config changed); rebuilding",
+                "Pipeline cache stale for '%s/%s' (config changed); rebuilding",
+                app_name,
                 functionality_ref,
             )
         graph = await _build_pipeline(blueprint, tier1_limits)
-        _pipeline_cache[functionality_ref] = (cache_key, graph)
+        _pipeline_cache[entry_key] = (cache_key, graph)
         return graph
 
 
@@ -195,13 +214,6 @@ async def _build_pipeline(blueprint: GraphBlueprint, tier1_limits: Functionality
     execute_tools_node = ToolNode(safe_tools)
 
     def make_retrieve_context_node():
-        """
-        Builds a node that embeds the latest user message, queries the
-        functionality's configured vector store, and stashes the results
-        in state["context"]["default"] for the model node to pick up.
-        Only built if the blueprint actually uses a retrieve_context node,
-        since not every functionality has a vectordb configured.
-        """
         if not tier1_limits.vectordb:
             raise ValueError(
                 f"Blueprint '{blueprint.name}' uses a retrieve_context node but "
@@ -261,8 +273,10 @@ async def _build_pipeline(blueprint: GraphBlueprint, tier1_limits: Functionality
         else:
             builder.add_edge(edge.source, edge.target)
 
-    # 5. Compile and return
-    graph = builder.compile()
+    # 5. Compile with the shared checkpointer so LangGraph accumulates
+    # state["messages"] per thread_id (== conversation_id) across calls,
+    # instead of every ainvoke() only seeing the single latest message.
+    graph = builder.compile(checkpointer=_checkpointer)
     logger.info(
         "Pipeline '%s' built in %.0f ms (%d nodes, %d edges)",
         blueprint.name,

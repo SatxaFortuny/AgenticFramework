@@ -40,10 +40,62 @@ spec:
               value: "8000"
             - name: LOG_LEVEL
               value: "INFO"
+            - name: WEATHER_MCP_URL
+              value: "http://weather-mcp-service:8000/sse"
+            - name: FINANCE_MCP_URL
+              value: "http://finance-mcp-service:8001/sse"
+            # CHANGED: greeting_bot's model (functionalities/greeting_bot.yaml,
+            # provider: groq) needs this to construct ChatGroq - without it,
+            # create_model() fails with groq.GroqError at the first request
+            # that builds that pipeline. Sourced from the groq-credentials
+            # Secret's `GROQ_API_KEY` data key - named per-provider rather
+            # than a generic `api-key`, since a shared/generic key name
+            # collides the moment a second provider (OpenAI, Anthropic, etc.)
+            # needs its own key in the same secret or a sibling one.
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: groq-credentials
+                  key: GROQ_API_KEY
           volumeMounts:
-            - name: config-volume
-              mountPath: /app/configs
+            # CHANGED: three flat mounts instead of one nested-path volume.
+            # CRI-O (this cluster's --container-runtime=crio) has a known bug
+            # creating ConfigMap volume mounts whose items[].path contains a
+            # "/" - it fails with "openat2: No such file or directory" even
+            # trying to create the outer mountPath. Splitting into one volume
+            # per subdirectory, each with flat (no-slash) item paths, avoids
+            # that entirely: the nesting comes from three separate mountPaths
+            # instead of slashes inside a single volume's items.
+            - name: app-yaml-volume
+              mountPath: /app/configs/greeting_finance_app
+            - name: functionalities-volume
+              mountPath: /app/configs/greeting_finance_app/functionalities
+            - name: blueprints-volume
+              mountPath: /app/configs/greeting_finance_app/blueprints
       volumes:
-        - name: config-volume
+        - name: app-yaml-volume
           configMap:
             name: agent-configs
+            items:
+              - key: app.yaml
+                path: app.yaml
+        - name: functionalities-volume
+          configMap:
+            name: agent-configs
+            items:
+              - key: functionalities-greeting_bot.yaml
+                path: greeting_bot.yaml
+              - key: functionalities-finance_bot.yaml
+                path: finance_bot.yaml
+        - name: blueprints-volume
+          configMap:
+            name: agent-configs
+            items:
+              - key: blueprints-greeting_bot.yaml
+                path: greeting_bot.yaml
+              - key: blueprints-finance_bot.yaml
+                path: finance_bot.yaml
+      # TODO: adding a new app or functionality still means touching both
+      # kustomization.yaml (the ConfigMap keys) and this file (which volume/
+      # item each key lands in). Same manual-duplication note as before -
+      # a Helm chart or generator script (Batch 7) is the real fix.

@@ -22,6 +22,7 @@ from core.schemas import ModelsConfig, VectorDBConfig
 
 def test_known_providers_registered():
     assert "ollama" in MODEL_REGISTRY
+    assert "groq" in MODEL_REGISTRY
     assert "chromadb" in VECTORDB_REGISTRY
     assert "ollama" in EMBEDDING_REGISTRY
 

@@ -16,12 +16,14 @@ from infrastructure.ChromaDB import ChromaDB
 from infrastructure.EmbedModelOllama import EmbedModelOllama
 
 # Concrete Infrastructure Classes
+from infrastructure.ModelGroq import ModelGroq
 from infrastructure.ModelOllama import ModelOllama
 
 logger = logging.getLogger(__name__)
 
 MODEL_REGISTRY = {
-    "ollama": ModelOllama
+    "ollama": ModelOllama,
+    "groq": ModelGroq,
 }
 
 VECTORDB_REGISTRY = {

@@ -7,11 +7,25 @@ resources:
   - k8s/04-mcp-tools.yaml
   - k8s/05-orchestrator.yaml
 
-# Builds the "agent-configs" ConfigMap directly from configs/*.yaml,
-# so there is exactly one source of truth for blueprint.yaml and config.yaml.
-# Replaces the old k8s/01-configs.yaml (delete that file).
+# CHANGED (Batch 1 restructure): configs/config.yaml + configs/blueprint.yaml
+# no longer exist - they were replaced by configs/{app}/app.yaml +
+# functionalities/*.yaml + blueprints/*.yaml (see core/schemas.py:load_app).
+#
+# A ConfigMap has no concept of subdirectories on its own - every file here
+# becomes one flat key. functionalities/greeting_bot.yaml and
+# blueprints/greeting_bot.yaml would collide on the same basename, so each
+# entry gets an explicit, unique key via `key=path`. The matching directory
+# structure is reconstructed at mount time in k8s/05-orchestrator.yaml's
+# volume `items` (that's where "functionalities-greeting_bot.yaml" becomes
+# "greeting_finance_app/functionalities/greeting_bot.yaml" again).
+#
+# NOTE: adding a new app or a new functionality means adding a line here
+# AND a matching item in 05-orchestrator.yaml - see the TODO there.
 configMapGenerator:
   - name: agent-configs
     files:
-      - configs/blueprint.yaml
-      - configs/config.yaml
+      - app.yaml=configs/greeting_finance_app/app.yaml
+      - functionalities-greeting_bot.yaml=configs/greeting_finance_app/functionalities/greeting_bot.yaml
+      - functionalities-finance_bot.yaml=configs/greeting_finance_app/functionalities/finance_bot.yaml
+      - blueprints-greeting_bot.yaml=configs/greeting_finance_app/blueprints/greeting_bot.yaml
+      - blueprints-finance_bot.yaml=configs/greeting_finance_app/blueprints/finance_bot.yaml

@@ -13,6 +13,7 @@ dependencies:
         - langgraph
         - langchain-core
         - langchain-ollama
+        - langchain-groq
         - mcp
         - langchain-mcp-adapters
         - chromadb
