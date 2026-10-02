@@ -1,6 +1,6 @@
 import time
-from dataclasses import dataclass
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 # TODO: Migrate to postgre
 

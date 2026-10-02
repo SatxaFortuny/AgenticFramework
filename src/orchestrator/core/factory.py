@@ -10,7 +10,12 @@ from core.IVectorDB import IVectorDB
 from core.logging_utils import elapsed_ms
 
 # Pydantic Schemas
-from core.schemas import EmbeddingConfig, FunctionalityConfig, ModelConfig, VectorDBConfig
+from core.schemas import (
+    EmbeddingConfig,
+    FunctionalityConfig,
+    ModelConfig,
+    VectorDBConfig,
+)
 from infrastructure.ChromaDB import ChromaDB
 from infrastructure.EmbedModelOllama import EmbedModelOllama
 
