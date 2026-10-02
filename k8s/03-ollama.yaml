@@ -4,6 +4,8 @@ metadata:
   name: ollama
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: ollama
@@ -14,7 +16,8 @@ spec:
     spec:
       containers:
         - name: ollama
-          image: ollama/ollama:latest
+          image: ollama/ollama:0.35.0
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 11434
           volumeMounts:

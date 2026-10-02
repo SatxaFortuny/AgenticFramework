@@ -1,12 +1,15 @@
 vectordb:
   - provider: "chromadb"
     collection_name: "general_knowledge"
-    embedding_provider: "ollama"
+embedding:
+  - provider: "ollama"
+    model_name: "nomic-embed-text:latest"
 tools:
   - server_name: "weather_mcp"
     # In-cluster default is the k8s Service DNS name. Override locally with:
     # export WEATHER_MCP_URL="http://localhost:9000/sse"
     url: "${WEATHER_MCP_URL:-http://weather-mcp-service:8000/sse}"
+    transport: "sse"
     allowed_tools: ["get_weather"]
 models:
   - provider: "groq"

@@ -3,17 +3,13 @@ import os
 import sys
 import time
 
-# Third-party loggers that become very chatty at DEBUG (one line per HTTP call).
+# These libraries generate too much logs in DEBUG. I we left them we would have problems finding other logs.
 _NOISY_LOGGERS = ("httpx", "httpcore")
 
 
 def setup_logging() -> None:
-    """
-    Configures root logging once at startup. The level comes from the LOG_LEVEL
-    env var (DEBUG / INFO / WARNING / ERROR), defaulting to INFO. An invalid
-    value falls back to INFO instead of crashing the service.
-    """
-    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    level_name = os.getenv("LOG_LEVEL", "INFO").upper()    # We read the log level. Default is INFO.
+    # Each log level is codified into an int. DEBUG(10), INFO(20), WARNING(30)...
     level = getattr(logging, level_name, logging.INFO)
     if not isinstance(level, int):
         level = logging.INFO

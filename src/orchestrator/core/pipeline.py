@@ -26,19 +26,19 @@ from core.schemas import AppConfig, FunctionalityConfig, GraphBlueprint
 
 logger = logging.getLogger(__name__)
 
-# CHANGED: one process-wide checkpointer, shared across every compiled graph
-# (all functionalities, all apps). This is safe because LangGraph namespaces
-# saved state by thread_id, not by which graph object called it - so as long
-# as api.py always passes the request's conversation_id as thread_id, two
-# different functionalities (or apps) never see each other's history even
-# though they share this one checkpointer instance.
+# One process-wide checkpointer, shared across every compiled graph (all
+# functionalities, all apps). Safe because LangGraph namespaces saved state
+# by thread_id, not by which graph object called it - api.py always passes
+# the request's conversation_id as thread_id, so two different
+# functionalities (or apps) never see each other's history even though they
+# share this one checkpointer instance.
 #
-# InMemorySaver does not persist across a restart and does not work across
+# InMemorySaver doesn't persist across a restart and doesn't work across
 # multiple orchestrator replicas (same limitation as InMemorySessionStore in
-# core/session_store.py, for the same reason: it's an in-process dict).
-# Swap for a Postgres/Redis-backed checkpointer when that starts to matter -
-# nothing else in this module needs to change, since _build_pipeline is the
-# only place that references it.
+# core/session_store.py, same reason: it's an in-process dict). Swap for a
+# Postgres/Redis-backed checkpointer when that starts to matter - nothing
+# else in this module needs to change, since _build_pipeline is the only
+# place that references it. Not doing this yet.
 _checkpointer = InMemorySaver()
 
 
@@ -46,10 +46,19 @@ _checkpointer = InMemorySaver()
 def should_continue(state: State) -> str:
     """Routes the graph to tools if the LLM made a tool call, otherwise ends."""
     last_message = state["messages"][-1]
+    # hasattr first: a HumanMessage has no tool_calls attribute at all, and
+    # Python short-circuits `and`, so the second check never runs on a
+    # message type that doesn't have the attribute.
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         names = [call["name"] for call in last_message.tool_calls]
         logger.info("Routing: tool call(s) requested %s -> execute_tools", names)
         logger.debug("Tool calls: %s", preview(last_message.tool_calls))
+        # NOTE: this string has to match the "execute_tools" key hardcoded
+        # into the conditional-edges mapping below. If we ever add a second
+        # condition function, it would be stuck returning this same literal
+        # or END - there's no per-edge way yet to declare a different
+        # expected return value (would need a condition_value-style field on
+        # EdgeDef in schemas.py, and this mapping built from it instead).
         return "execute_tools"
     logger.info("Routing: no tool calls -> END")
     return END
@@ -65,6 +74,9 @@ def _timed_node(node_id: str, fn):
         try:
             result = fn(state)
         except Exception as exc:
+            # Log before re-raising - the exception still propagates and
+            # fails the graph run, this only makes sure it's visible in the
+            # logs with timing, not just wherever catches it upstream.
             logger.error(
                 "Node '%s' failed after %.0f ms: %s", node_id, elapsed_ms(start), exc
             )
@@ -92,6 +104,10 @@ def _timed_tool_node(node_id: str, tool_node: ToolNode):
             )
             raise
         logger.info("Node '%s' finished in %.0f ms", node_id, elapsed_ms(start))
+        # Debug-only: what each tool actually returned, truncated via
+        # preview() so one large tool result doesn't flood the log. Gated on
+        # isEnabledFor so none of this - the loop, the getattr, the preview
+        # calls - runs at all when DEBUG logging is off.
         if logger.isEnabledFor(logging.DEBUG) and isinstance(result, dict):
             for message in result.get("messages", []):
                 logger.debug(
@@ -106,19 +122,30 @@ def _timed_tool_node(node_id: str, tool_node: ToolNode):
 
 # --- Pipeline cache ---
 #
-# CHANGED: the cache is now keyed by (app_name, functionality_ref), not just
-# functionality_ref. Before multi-app support, two different apps could not
-# both define a "greeting_bot" functionality without colliding in this cache
-# - one app's compiled graph would silently serve the other app's requests.
-# The cache VALUE's hash payload also now includes app_name, so a config
-# change in one app never accidentally invalidates another app's cache entry
-# purely from a hash coincidence (astronomically unlikely, but the app_name
-# key already makes that moot).
+# Building a pipeline does real I/O (MCP tool discovery, constructing model/
+# vectordb/embedder clients), so it's cached per (app_name, functionality)
+# instead of rebuilt on every request.
+#
+# Keyed by (app_name, functionality_ref), not just functionality_ref: two
+# different apps could each define their own "greeting_bot" functionality,
+# and without app_name in the key, one app's compiled graph would silently
+# serve the other app's requests. The cache VALUE's hash (_cache_key, below)
+# also includes app_name, for the same reason.
 _pipeline_cache: dict[tuple[str, str], tuple[str, object]] = {}
+# One lock per (app_name, functionality) so two concurrent requests for the
+# same functionality don't both rebuild at once on a cache miss; requests
+# for different functionalities don't block each other.
 _pipeline_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
 
 def _cache_key(app_name: str, blueprint: GraphBlueprint, tier1_limits: FunctionalityConfig) -> str:
+    """
+    Hashes everything that should invalidate a cached pipeline if it changes:
+    the app, the blueprint, and the functionality's resolved config.
+    model_dump() turns the Pydantic models back into plain dicts so they can
+    be JSON-serialized; sort_keys=True makes the JSON deterministic so the
+    same content always hashes the same way regardless of dict order.
+    """
     payload = {
         "app_name": app_name,
         "blueprint": blueprint.model_dump(),
@@ -144,6 +171,10 @@ async def get_or_create_pipeline(
     resolved app's name (from AppBundle.meta.name / discover_apps()), not
     anything the caller invents.
     """
+    # Defense in depth, not the primary check - load_app() already enforces
+    # a blueprint's functionality_ref matches the functionality file it came
+    # from. This just means a mismatched/forged blueprint can't be used to
+    # run against a different functionality's resources than intended.
     if blueprint.functionality_ref not in app_config.functionalities:
         raise ValueError(
             f"Security Block: Blueprint requested unauthorized functionality '{blueprint.functionality_ref}'."
@@ -154,13 +185,18 @@ async def get_or_create_pipeline(
     cache_key = _cache_key(app_name, blueprint, tier1_limits)
     entry_key = (app_name, functionality_ref)
 
+    # Fast path, no lock needed just to read.
     cached = _pipeline_cache.get(entry_key)
     if cached is not None and cached[0] == cache_key:
         logger.debug("Pipeline cache hit for '%s/%s'", app_name, functionality_ref)
         return cached[1]
 
+    # Cache miss or stale: only take the lock now, and only for this
+    # specific (app_name, functionality).
     lock = _pipeline_locks.setdefault(entry_key, asyncio.Lock())
     async with lock:
+        # Re-check inside the lock: another request may have already
+        # rebuilt while this one waited for the lock.
         cached = _pipeline_cache.get(entry_key)
         if cached is not None and cached[0] == cache_key:
             logger.debug(
@@ -193,12 +229,16 @@ async def _build_pipeline(blueprint: GraphBlueprint, tier1_limits: Functionality
     )
 
     # 1. Spin up secure infrastructure
+    # Only the first model is used today - see FunctionalityConfig's
+    # docstring in schemas.py.
     active_model = create_model(tier1_limits.models[0])
     logger.info(
         "Model: %s/%s",
         tier1_limits.models[0].provider,
         tier1_limits.models[0].model_name,
     )
+    # "Safe" = already filtered by the allowlist, see get_filtered_mcp_tools
+    # in factory.py.
     safe_tools = await get_filtered_mcp_tools(tier1_limits)
 
     if safe_tools:
@@ -214,19 +254,37 @@ async def _build_pipeline(blueprint: GraphBlueprint, tier1_limits: Functionality
     execute_tools_node = ToolNode(safe_tools)
 
     def make_retrieve_context_node():
+        """
+        Only called if the blueprint actually has a retrieve_context node
+        (see ACTION_REGISTRY below) - vectordb/embedder clients are only
+        ever created if the functionality needs them.
+        """
         if not tier1_limits.vectordb:
             raise ValueError(
                 f"Blueprint '{blueprint.name}' uses a retrieve_context node but "
                 f"functionality '{blueprint.functionality_ref}' has no vectordb configured."
             )
+        if not tier1_limits.embedding:
+            raise ValueError(
+                f"Blueprint '{blueprint.name}' uses a retrieve_context node but "
+                f"functionality '{blueprint.functionality_ref}' has no embedding configured."
+            )
+        # [0]: same "only the first entry is used today" situation as
+        # models. vectordb[0] and embedding[0] are assumed to correspond to
+        # each other positionally - see the note on this in schemas.py.
         vectordb_config = tier1_limits.vectordb[0]
+        embedding_config = tier1_limits.embedding[0]
         vectordb = create_vectordb(vectordb_config)
-        embedder = create_embedder(vectordb_config)
+        embedder = create_embedder(embedding_config)
 
         def retrieve_context_node(state: State):
             last_user_message = state["messages"][-1].content
             query_vector = embedder.embed(content=[last_user_message])[0]
             results = vectordb.query(query=query_vector, n_res=3)
+            # Copy rather than mutate state.get("context", {}) in place -
+            # LangGraph nodes are expected to return updates, not mutate
+            # state directly. "default" is the same context_id used by
+            # call_llm_node, which is how the LLM node picks this back up.
             context = dict(state.get("context", {}))
             context["default"] = results
             return {"context": context}
@@ -234,13 +292,20 @@ async def _build_pipeline(blueprint: GraphBlueprint, tier1_limits: Functionality
         return retrieve_context_node
 
     # 3. Map YAML strings to actual Python execution logic
+    # Runtime counterpart to NodeDef in schemas.py: a blueprint only ever
+    # stores action names as strings, this dict resolves those strings into
+    # real callables, rebuilt fresh per pipeline (since the callables close
+    # over this build's active_model/safe_tools).
     ACTION_REGISTRY = {
         "call_llm": call_llm_node,
         "execute_tools": execute_tools_node,
     }
+    # Only added - and only built - if this blueprint actually uses it, since
+    # not every functionality needs a vectordb.
     if any(node.action == "retrieve_context" for node in blueprint.nodes):
         ACTION_REGISTRY["retrieve_context"] = make_retrieve_context_node()
 
+    # Same idea, for condition_action strings used by conditional edges.
     CONDITION_REGISTRY = {
         "should_continue": should_continue
     }
@@ -253,6 +318,8 @@ async def _build_pipeline(blueprint: GraphBlueprint, tier1_limits: Functionality
             raise ValueError(f"Unknown action '{node.action}' in blueprint.")
         action = ACTION_REGISTRY[node.action]
         logger.debug("Adding node '%s' (action=%s)", node.id, node.action)
+        # ToolNode needs the async wrapper; every other action is a plain
+        # sync function and uses _timed_node.
         if isinstance(action, ToolNode):
             builder.add_node(node.id, _timed_tool_node(node.id, action))
         else:
@@ -265,6 +332,10 @@ async def _build_pipeline(blueprint: GraphBlueprint, tier1_limits: Functionality
             condition_func = CONDITION_REGISTRY.get(edge.condition_action)
             if not condition_func:
                 raise ValueError(f"Unknown condition '{edge.condition_action}' in blueprint.")
+            # Hardcoded mapping - see the NOTE on should_continue above and
+            # EdgeDef's docstring in schemas.py. Every conditional edge in
+            # the project is currently forced through this same two-outcome
+            # mapping, regardless of which condition_action it names.
             builder.add_conditional_edges(
                 edge.source,
                 condition_func,

@@ -1,8 +1,6 @@
 name: "greeting_finance_app"
 description: "Demo app bundling a general greeting/weather bot and a finance Q&A bot."
 
-# App-wide default model. A functionality that omits its own `models` list
-# inherits this. finance_bot overrides it below with its own model.
 defaults:
   model:
     provider: "ollama"
