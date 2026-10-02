@@ -19,7 +19,7 @@ from core.schemas import (
     AppConfig,
     FunctionalityConfig,
     GraphBlueprint,
-    ModelsConfig,
+    ModelConfig,
     NodeDef,
     EdgeDef,
 )
@@ -39,7 +39,7 @@ def make_app_config(model_name: str = "llama3.1:8b") -> AppConfig:
     return AppConfig(
         functionalities={
             "greeting_bot": FunctionalityConfig(
-                models=[ModelsConfig(provider="ollama", model_name=model_name)],
+                models=[ModelConfig(provider="ollama", model_name=model_name)],
             )
         }
     )

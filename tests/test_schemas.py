@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src", "orchest
 import pytest
 import yaml
 
-from core.schemas import VectorDBConfig, load_app_config, load_blueprint
+from core.schemas import EmbeddingConfig, load_app_config, load_blueprint
 
 SAMPLE_APP_CONFIG = {
     "functionalities": {
@@ -27,13 +27,19 @@ SAMPLE_APP_CONFIG = {
                 {
                     "provider": "chromadb",
                     "collection_name": "general_knowledge",
-                    "embedding_provider": "ollama",
+                }
+            ],
+            "embedding": [
+                {
+                    "provider": "ollama",
+                    "model_name": "nomic-embed-text:latest",
                 }
             ],
             "tools": [
                 {
                     "server_name": "weather_mcp",
                     "url": "${WEATHER_MCP_URL:-http://weather-mcp-service:8000/sse}",
+                    "transport": "sse",
                     "allowed_tools": ["get_weather"],
                 }
             ],
@@ -57,15 +63,11 @@ def test_load_app_config(sample_config_path):
     greeting = config.functionalities["greeting_bot"]
     assert greeting.models[0].provider == "ollama"
     assert greeting.tools[0].server_name == "weather_mcp"
-    assert greeting.vectordb[0].embedding_provider == "ollama"
+    assert greeting.embedding[0].provider == "ollama"
 
-
-def test_vectordb_embedding_provider_defaults_to_ollama():
-    """A config that omits embedding_provider (pre-split configs) should
-    still work: it falls back to 'ollama', matching the old behaviour where
-    the embedding backend was implicitly tied to the vectordb provider."""
-    config = VectorDBConfig(provider="chromadb", collection_name="x")
-    assert config.embedding_provider == "ollama"
+def test_embedding_config_parses():
+    config = EmbeddingConfig(provider="ollama", model_name="nomic-embed-text:latest")
+    assert config.provider == "ollama"
 
 
 def test_missing_config_raises():
