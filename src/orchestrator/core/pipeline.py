@@ -8,12 +8,6 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
-try:
-    # Current langgraph versions.
-    from langgraph.checkpoint.memory import InMemorySaver
-except ImportError:  # pragma: no cover - older langgraph versions
-    from langgraph.checkpoint.memory import MemorySaver as InMemorySaver
-
 from core.factory import (
     create_embedder,
     create_model,
@@ -26,20 +20,13 @@ from core.schemas import AppConfig, FunctionalityConfig, GraphBlueprint
 
 logger = logging.getLogger(__name__)
 
-# One process-wide checkpointer, shared across every compiled graph (all
-# functionalities, all apps). Safe because LangGraph namespaces saved state
-# by thread_id, not by which graph object called it - api.py always passes
-# the request's conversation_id as thread_id, so two different
-# functionalities (or apps) never see each other's history even though they
-# share this one checkpointer instance.
-#
-# InMemorySaver doesn't persist across a restart and doesn't work across
-# multiple orchestrator replicas (same limitation as InMemorySessionStore in
-# core/session_store.py, same reason: it's an in-process dict). Swap for a
-# Postgres/Redis-backed checkpointer when that starts to matter - nothing
-# else in this module needs to change, since _build_pipeline is the only
-# place that references it. Not doing this yet.
-_checkpointer = InMemorySaver()
+# The checkpointer is NOT created here anymore: api.py builds it at startup
+# (Postgres-backed when configured - see core/persistence.py) and passes it
+# into get_or_create_pipeline(). One instance is shared by every compiled
+# graph (all functionalities, all apps). That's safe because LangGraph
+# namespaces saved state by thread_id, not by which graph object wrote it -
+# api.py always passes the request's conversation_id as thread_id, so two
+# functionalities (or apps) never see each other's history.
 
 
 # --- Standard Edge Conditions ---
@@ -162,7 +149,10 @@ def clear_pipeline_cache() -> None:
 
 
 async def get_or_create_pipeline(
-    app_name: str, blueprint: GraphBlueprint, app_config: AppConfig
+    app_name: str,
+    blueprint: GraphBlueprint,
+    app_config: AppConfig,
+    checkpointer,
 ):
     """
     Public entry point for api.py. Returns a cached compiled graph for this
@@ -170,6 +160,13 @@ async def get_or_create_pipeline(
     (and caches) a fresh one. `app_name` disambiguates the cache: it's the
     resolved app's name (from AppBundle.meta.name / discover_apps()), not
     anything the caller invents.
+
+    `checkpointer` is whatever persistence.py built at startup. It is
+    deliberately required (no default): silently compiling without one would
+    mean conversations quietly lose their history. It is not part of the
+    cache key - there is one per process, for the process's whole life (the
+    cache is cleared when api.py's lifespan starts, so a graph never outlives
+    the pool its checkpointer was built on).
     """
     # Defense in depth, not the primary check - load_app() already enforces
     # a blueprint's functionality_ref matches the functionality file it came
@@ -210,13 +207,15 @@ async def get_or_create_pipeline(
                 app_name,
                 functionality_ref,
             )
-        graph = await _build_pipeline(blueprint, tier1_limits)
+        graph = await _build_pipeline(blueprint, tier1_limits, checkpointer)
         _pipeline_cache[entry_key] = (cache_key, graph)
         return graph
 
 
 # --- The Pipeline Compiler ---
-async def _build_pipeline(blueprint: GraphBlueprint, tier1_limits: FunctionalityConfig):
+async def _build_pipeline(
+    blueprint: GraphBlueprint, tier1_limits: FunctionalityConfig, checkpointer
+):
     """
     Instantiates resources and dynamically builds the LangGraph for one
     functionality. Only called on a cache miss - see get_or_create_pipeline().
@@ -344,10 +343,12 @@ async def _build_pipeline(blueprint: GraphBlueprint, tier1_limits: Functionality
         else:
             builder.add_edge(edge.source, edge.target)
 
-    # 5. Compile with the shared checkpointer so LangGraph accumulates
+    # 5. Compile with the injected checkpointer so LangGraph accumulates
     # state["messages"] per thread_id (== conversation_id) across calls,
     # instead of every ainvoke() only seeing the single latest message.
-    graph = builder.compile(checkpointer=_checkpointer)
+    # With the Postgres saver this history is shared by all replicas and
+    # survives restarts. (It requires async invocation - api.py uses ainvoke.)
+    graph = builder.compile(checkpointer=checkpointer)
     logger.info(
         "Pipeline '%s' built in %.0f ms (%d nodes, %d edges)",
         blueprint.name,

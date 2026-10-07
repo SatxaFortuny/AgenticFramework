@@ -1,43 +1,68 @@
 import logging
+import os
 import time
+from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 from core.logging_utils import elapsed_ms, preview, setup_logging
-from core.pipeline import get_or_create_pipeline
+from core.persistence import build_persistence
+from core.pipeline import clear_pipeline_cache, get_or_create_pipeline
 from core.routing import RoutingError, resolve_session
-from core.schemas import discover_apps
-from core.session_store import InMemorySessionStore
+from core.schemas import AppBundle, discover_apps
 
 setup_logging()
 logger = logging.getLogger("orchestrator")
 
-# discover_apps() scans configs/ for every app directory (any subdir with an
-# app.yaml) and load_app()'s each - adding a new app is just adding a new
-# configs/{app}/ directory, no code change here. Both of these are built
-# once, at module import time (i.e. process startup), not per-request.
-#
-# _session_store maps conversation_id -> (app, functionality) so a client
-# only names app/functionality on the first message of a conversation - see
-# core/routing.py for the full resolution rules. It's in-process (see
-# core/session_store.py's docstring for why that's a real limitation once
-# this runs with >1 replica - same limitation as pipeline.py's checkpointer,
-# and the two should be upgraded together since they're both keyed by the
-# same conversation_id and one being stale without the other is worse than
-# both being stale).
-_app_registry = discover_apps("configs")
-_session_store = InMemorySessionStore()
 
-logger.info(
-    "Loaded %d app(s): %s",
-    len(_app_registry),
-    {name: list(bundle.app_config.functionalities) for name, bundle in _app_registry.items()},
-)
+@asynccontextmanager
+async def lifespan(fastapi_app: FastAPI):
+    """
+    Builds everything stateful once at startup and tears it down at shutdown.
+    Lives in a lifespan (not at module import time, as before) because the
+    Postgres connection pool is async and has to be opened and closed inside
+    the running event loop.
+
+    discover_apps() scans configs/ for every app directory (any subdir with an
+    app.yaml) and load_app()'s each - adding a new app is just adding a new
+    configs/{app}/ directory, no code change here. A broken config raises
+    here, so the pod fails at startup instead of mid-request.
+
+    The persistence object carries the session store (conversation_id ->
+    app/functionality) and the LangGraph checkpointer (message history). Both
+    are Postgres-backed when DATABASE_URL/PGHOST is set, which is what makes
+    the orchestrator stateless and safe to run with more than one replica -
+    see core/persistence.py.
+    """
+    fastapi_app.state.app_registry = discover_apps(os.getenv("CONFIGS_ROOT", "configs"))
+    logger.info(
+        "Loaded %d app(s): %s",
+        len(fastapi_app.state.app_registry),
+        {
+            name: list(bundle.app_config.functionalities)
+            for name, bundle in fastapi_app.state.app_registry.items()
+        },
+    )
+    # A cached graph holds a reference to the checkpointer (and so to the
+    # pool) of the lifespan that built it - never reuse one across lifespans.
+    clear_pipeline_cache()
+    fastapi_app.state.persistence = await build_persistence()
+    try:
+        yield
+    finally:
+        await fastapi_app.state.persistence.close()
 
 
-async def chat_with_bot(user_message: str, app: str, functionality: str, conversation_id: str) -> str:
+async def chat_with_bot(
+    app_registry: dict[str, AppBundle],
+    checkpointer,
+    user_message: str,
+    app: str,
+    functionality: str,
+    conversation_id: str,
+) -> str:
     """
     Runs one turn of a conversation: gets (or builds) the compiled graph for
     this (app, functionality), invokes it with the new user message, and
@@ -45,10 +70,10 @@ async def chat_with_bot(user_message: str, app: str, functionality: str, convers
     have already been resolved and validated by resolve_session() - this
     function does no validation of its own.
     """
-    bundle = _app_registry[app]
+    bundle = app_registry[app]
     blueprint = bundle.blueprints[functionality]
 
-    graph = await get_or_create_pipeline(app, blueprint, bundle.app_config)
+    graph = await get_or_create_pipeline(app, blueprint, bundle.app_config, checkpointer)
 
     start = time.perf_counter()
     logger.info(
@@ -56,10 +81,10 @@ async def chat_with_bot(user_message: str, app: str, functionality: str, convers
         app, functionality, conversation_id,
     )
     # thread_id == conversation_id: this is what lets the shared checkpointer
-    # in core/pipeline.py accumulate this conversation's message history
-    # across separate /chat calls, instead of each call only seeing the one
-    # message it was sent. Only the new message is passed in - the
-    # checkpointer is what supplies everything before it.
+    # accumulate this conversation's message history across separate /chat
+    # calls (and across replicas and restarts, with the Postgres saver),
+    # instead of each call only seeing the one message it was sent. Only the
+    # new message is passed in - the checkpointer supplies everything before it.
     response = await graph.ainvoke(
         {"messages": [("user", user_message)]},
         config={"configurable": {"thread_id": conversation_id}},
@@ -89,12 +114,32 @@ class ChatResponse(BaseModel):
                            # store this and reuse it for the next message.
 
 
-app = FastAPI(title="Agentic Framework Orchestrator")
+app = FastAPI(title="Agentic Framework Orchestrator", lifespan=lifespan)
+
+
+@app.get("/healthz")
+async def healthz():
+    """Liveness: the process is up and serving. Deliberately checks nothing
+    external - a database outage must not get the pod restarted."""
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readyz(http_request: Request):
+    """Readiness: this pod can actually serve /chat, i.e. it can reach its
+    persistence backend. Failing it takes the pod out of the Service."""
+    try:
+        await http_request.app.state.persistence.ping()
+    except Exception:
+        logger.exception("Readiness check failed")
+        raise HTTPException(status_code=503, detail="Persistence backend unavailable")
+    return {"status": "ready"}
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest):
+async def chat_endpoint(request: ChatRequest, http_request: Request):
     start = time.perf_counter()
+    state = http_request.app.state
     logger.info("Request received (message_length=%d)", len(request.message))
     # Debug-only: the actual message content, truncated via preview() - never
     # logged at INFO, since a user message could contain sensitive content
@@ -106,8 +151,8 @@ async def chat_endpoint(request: ChatRequest):
             conversation_id=request.conversation_id,
             app=request.app,
             functionality=request.functionality,
-            session_store=_session_store,
-            app_registry=_app_registry,
+            session_store=state.persistence.session_store,
+            app_registry=state.app_registry,
         )
     except RoutingError as e:
         # RoutingError already carries the right HTTP status (400/404/409 -
@@ -118,7 +163,12 @@ async def chat_endpoint(request: ChatRequest):
 
     try:
         response_text = await chat_with_bot(
-            request.message, session.app, session.functionality, session.conversation_id
+            state.app_registry,
+            state.persistence.checkpointer,
+            request.message,
+            session.app,
+            session.functionality,
+            session.conversation_id,
         )
         logger.info(
             "Response returned (response_length=%d, total=%.0f ms)",

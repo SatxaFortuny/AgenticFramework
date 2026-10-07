@@ -25,6 +25,15 @@ from core.schemas import (
 )
 
 
+# Stand-in for the checkpointer api.py injects at startup. These tests stub
+# _build_pipeline out, so it only needs to be passed through, never used.
+CHECKPOINTER = object()
+
+
+async def _get(app_name, blueprint, app_config):
+    return await get_or_create_pipeline(app_name, blueprint, app_config, CHECKPOINTER)
+
+
 def make_blueprint() -> GraphBlueprint:
     return GraphBlueprint(
         name="test_graph",
@@ -64,14 +73,14 @@ def test_second_call_is_a_cache_hit(monkeypatch):
     monkeypatch.setattr(
         pipeline_module,
         "_build_pipeline",
-        lambda bp, cfg: _fake_build_pipeline(bp, cfg, build_calls),
+        lambda bp, cfg, cp: _fake_build_pipeline(bp, cfg, build_calls),
     )
 
     async def run():
         blueprint = make_blueprint()
         app_config = make_app_config()
-        graph1 = await get_or_create_pipeline("greeting_finance_app", blueprint, app_config)
-        graph2 = await get_or_create_pipeline("greeting_finance_app", blueprint, app_config)
+        graph1 = await _get("greeting_finance_app", blueprint, app_config)
+        graph2 = await _get("greeting_finance_app", blueprint, app_config)
         return graph1, graph2
 
     graph1, graph2 = asyncio.run(run())
@@ -85,15 +94,15 @@ def test_config_change_invalidates_cache(monkeypatch):
     monkeypatch.setattr(
         pipeline_module,
         "_build_pipeline",
-        lambda bp, cfg: _fake_build_pipeline(bp, cfg, build_calls),
+        lambda bp, cfg, cp: _fake_build_pipeline(bp, cfg, build_calls),
     )
 
     async def run():
         blueprint = make_blueprint()
-        graph1 = await get_or_create_pipeline(
+        graph1 = await _get(
             "greeting_finance_app", blueprint, make_app_config("llama3.1:8b")
         )
-        graph2 = await get_or_create_pipeline(
+        graph2 = await _get(
             "greeting_finance_app", blueprint, make_app_config("llama3.1:70b")
         )
         return graph1, graph2
@@ -112,19 +121,19 @@ def test_different_apps_with_same_functionality_name_do_not_collide(monkeypatch)
     monkeypatch.setattr(
         pipeline_module,
         "_build_pipeline",
-        lambda bp, cfg: _fake_build_pipeline(bp, cfg, build_calls),
+        lambda bp, cfg, cp: _fake_build_pipeline(bp, cfg, build_calls),
     )
 
     async def run():
         blueprint = make_blueprint()
-        graph_app1 = await get_or_create_pipeline(
+        graph_app1 = await _get(
             "app_one", blueprint, make_app_config("llama3.1:8b")
         )
-        graph_app2 = await get_or_create_pipeline(
+        graph_app2 = await _get(
             "app_two", blueprint, make_app_config("llama3.1:8b")
         )
         # Same app again - should be a cache hit, not a third build.
-        graph_app1_again = await get_or_create_pipeline(
+        graph_app1_again = await _get(
             "app_one", blueprint, make_app_config("llama3.1:8b")
         )
         return graph_app1, graph_app2, graph_app1_again
@@ -141,7 +150,7 @@ def test_unauthorized_functionality_ref_raises_without_building(monkeypatch):
     monkeypatch.setattr(
         pipeline_module,
         "_build_pipeline",
-        lambda bp, cfg: _fake_build_pipeline(bp, cfg, build_calls),
+        lambda bp, cfg, cp: _fake_build_pipeline(bp, cfg, build_calls),
     )
 
     blueprint = GraphBlueprint(
@@ -153,9 +162,26 @@ def test_unauthorized_functionality_ref_raises_without_building(monkeypatch):
     )
 
     async def run():
-        await get_or_create_pipeline("greeting_finance_app", blueprint, make_app_config())
+        await _get("greeting_finance_app", blueprint, make_app_config())
 
     with pytest.raises(ValueError, match="Security Block"):
         asyncio.run(run())
 
     assert build_calls == []
+
+
+def test_checkpointer_is_forwarded_to_the_build_step(monkeypatch):
+    """The checkpointer api.py creates at startup must be the one the graph is
+    compiled with - otherwise history silently goes to the wrong place."""
+    received = []
+
+    async def fake_build(blueprint, tier1_limits, checkpointer):
+        received.append(checkpointer)
+        return object()
+
+    monkeypatch.setattr(pipeline_module, "_build_pipeline", fake_build)
+    sentinel = object()
+    asyncio.run(
+        get_or_create_pipeline("greeting_finance_app", make_blueprint(), make_app_config(), sentinel)
+    )
+    assert received == [sentinel]

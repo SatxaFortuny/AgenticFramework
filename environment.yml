@@ -11,6 +11,8 @@ dependencies:
         - starlette
         - httpx
         - langgraph
+        - langgraph-checkpoint-postgres
+        - psycopg[binary,pool]
         - langchain-core
         - langchain-ollama
         - langchain-groq

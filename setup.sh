@@ -10,6 +10,17 @@ else
     echo "Minikube already started"
 fi
 
+# Fail fast with an actionable message instead of a pod stuck in
+# CreateContainerConfigError (a missing Secret or key only shows up at
+# container-create time, not at `kubectl apply` - see the postmortem,
+# Incident 3).
+for secret in groq-credentials postgres-credentials; do
+    if ! kubectl get secret "$secret" > /dev/null 2>&1; then
+        echo "ERROR: Secret '$secret' not found. Create it first - see the README (Quick start, step 1)."
+        exit 1
+    fi
+done
+
 echo "Building orchestrator image"
 podman build -t af-orchestrator:latest ./src/orchestrator
 

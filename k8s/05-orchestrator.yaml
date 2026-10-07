@@ -25,6 +25,39 @@ spec:
       labels:
         app: orchestrator
     spec:
+      initContainers:
+        # Creates/upgrades the database schema before the app starts. Runs
+        # once per pod start; with several replicas starting together they
+        # serialise on a Postgres advisory lock (core/persistence.py), so this
+        # is safe. It also waits (up to 2 min) for Postgres to accept
+        # connections, so a cold `kubectl apply` doesn't crash-loop the pod.
+        - name: migrate
+          image: localhost/af-orchestrator:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "migrate.py"]
+          env:
+            # Postgres connection, via the standard libpq variables (psycopg
+            # reads these itself - see core/persistence.py). Used instead of a
+            # DATABASE_URL so the password never has to be URL-encoded.
+            - name: PGHOST
+              value: "postgres-service"
+            - name: PGPORT
+              value: "5432"
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_DB
       containers:
         - name: orchestrator
           image: localhost/af-orchestrator:latest
@@ -44,6 +77,28 @@ spec:
               value: "http://weather-mcp-service:8000/sse"
             - name: FINANCE_MCP_URL
               value: "http://finance-mcp-service:8001/sse"
+            # Postgres connection, via the standard libpq variables (psycopg
+            # reads these itself - see core/persistence.py). Used instead of a
+            # DATABASE_URL so the password never has to be URL-encoded.
+            - name: PGHOST
+              value: "postgres-service"
+            - name: PGPORT
+              value: "5432"
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_DB
             # CHANGED: greeting_bot's model (functionalities/greeting_bot.yaml,
             # provider: groq) needs this to construct ChatGroq - without it,
             # create_model() fails with groq.GroqError at the first request
@@ -57,6 +112,28 @@ spec:
                 secretKeyRef:
                   name: groq-credentials
                   key: GROQ_API_KEY
+          # /healthz = process is up (never touches the DB, so a database
+          # outage can't get pods restarted). /readyz = can reach Postgres;
+          # failing it just removes the pod from the Service until it recovers.
+          # The startup probe gives the app up to 60 s to open its DB pool.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 3
           volumeMounts:
             # CHANGED: three flat mounts instead of one nested-path volume.
             # CRI-O (this cluster's --container-runtime=crio) has a known bug

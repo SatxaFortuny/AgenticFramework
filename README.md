@@ -15,7 +15,8 @@ Everything runs as pods in a local minikube cluster:
 
 | Pod            | Role                                              |
 |----------------|---------------------------------------------------|
-| `orchestrator` | FastAPI service exposing `/chat`, runs the graphs |
+| `orchestrator` | FastAPI service exposing `/chat`, runs the graphs. Stateless: can run with several replicas |
+| `postgres`     | Conversation history (LangGraph checkpoints) and session routing, shared by all orchestrator replicas |
 | `ollama`       | Local LLM and embedding model server              |
 | `chromadb`     | Vector store                                      |
 | `weather-mcp`  | MCP tool server (weather)                         |
@@ -32,13 +33,18 @@ The orchestrator is exposed as a NodePort service (`30080`). `setup.sh` starts m
 
 ## Quick start
 
-### 1. Create the Groq secret
+### 1. Create the secrets
 
-The orchestrator reads `GROQ_API_KEY` from a Kubernetes Secret, so create it once before deploying:
+Two Kubernetes Secrets are read by the deployment, so create them once before deploying (`setup.sh` refuses to continue if either is missing):
 
 ```bash
 kubectl create secret generic groq-credentials \
   --from-literal=GROQ_API_KEY='your-key-here'
+
+kubectl create secret generic postgres-credentials \
+  --from-literal=POSTGRES_USER=af \
+  --from-literal=POSTGRES_PASSWORD='choose-a-password' \
+  --from-literal=POSTGRES_DB=af
 ```
 
 ### 2. Deploy
@@ -72,7 +78,7 @@ kubectl exec -it deploy/ollama -- ollama pull nomic-embed-text
 kubectl get pods -w
 ```
 
-All five pods should reach `1/1 Running`. The first start can be slow while images load.
+All six pods should reach `1/1 Running`. The first start can be slow while images load. The orchestrator pod briefly shows `Init:0/1` while its `migrate` init container creates the database schema.
 
 ## Talking to the bots
 
@@ -139,7 +145,16 @@ curl -X POST http://localhost:8000/chat \
 | `functionality`   | first message only  | Functionality name within that app                   |
 | `conversation_id` | after the first one | Returned by every response; reuse it to keep context |
 
-Sessions are held in memory by the orchestrator, so conversations are lost when the orchestrator pod restarts.
+Conversations are stored in Postgres, so they survive orchestrator restarts and any replica can continue any conversation. To see it work:
+
+```bash
+kubectl delete pod -l app=orchestrator     # restart the orchestrator
+# ...wait until it is Ready, then send "what did I ask?" with the same conversation_id:
+# the full history is still there.
+kubectl scale deployment orchestrator --replicas=2   # and now either replica can answer
+```
+
+(Without `PGHOST`/`DATABASE_URL` set - e.g. bare `uvicorn` in local dev - the orchestrator falls back to in-memory storage and logs a warning; those conversations are lost on restart.)
 
 ## Configuration
 
@@ -160,12 +175,29 @@ Adding a new app or functionality currently means:
 
 Then run `./setup.sh` again.
 
+## Running the tests
+
+```bash
+pytest -m "not integration"          # unit tests, no services needed
+```
+
+The Postgres-backed tests (migrations, checkpoint persistence, restart behaviour) skip themselves unless a database is available:
+
+```bash
+docker run -d --name af-test-pg -p 5432:5432 -e POSTGRES_USER=af -e POSTGRES_PASSWORD=af -e POSTGRES_DB=af_test postgres:16
+TEST_DATABASE_URL=postgresql://af:af@localhost:5432/af_test pytest -m postgres
+```
+
+To run the orchestrator locally against that database: `PGHOST=localhost PGUSER=af PGPASSWORD=af PGDATABASE=af_test python migrate.py`, then start it with the same variables.
+
 ## Useful commands
 
 ```bash
 kubectl get pods                              # cluster status
 kubectl logs -l app=orchestrator --tail=60    # orchestrator logs
 kubectl exec -it deploy/ollama -- ollama list # models available in Ollama
+kubectl logs deploy/orchestrator -c migrate   # schema migration output
+kubectl exec -it statefulset/postgres -- sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 kubectl delete -k .                           # remove all workloads (volumes are kept)
 minikube stop                                 # stop the cluster
 minikube delete                               # remove the cluster completely
@@ -178,6 +210,7 @@ See [`docs/runbook.md`](docs/runbook.md) for symptom-first fixes, including:
 - `CreateContainerError` on the orchestrator
 - `{"detail":"Internal pipeline error"}` responses
 - `GroqError: The api_key client option must be set`
+- Orchestrator stuck in `Init:` / `CreateContainerConfigError`, or `Running` but `0/1` Ready (Postgres)
 - Pods stuck on an old ReplicaSet
 - Rebuilt images that don't change behavior
 
