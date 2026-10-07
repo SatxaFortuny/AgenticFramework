@@ -1,0 +1,97 @@
+# Postgres: the shared persistence layer for every orchestrator replica
+# (LangGraph checkpoints = message history, plus the session store). It is a
+# backing service, not something we write - the orchestrator just connects to
+# postgres-service, which is what lets the orchestrator itself stay stateless.
+#
+# Credentials come from a Secret created by hand (same pattern as
+# groq-credentials; the key names are exactly what the manifests below
+# reference - a mismatch fails silently at `kubectl apply`, see the
+# postmortem's Incident 3):
+#
+#   kubectl create secret generic postgres-credentials \
+#     --from-literal=POSTGRES_USER=af \
+#     --from-literal=POSTGRES_PASSWORD='choose-a-password' \
+#     --from-literal=POSTGRES_DB=af
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: "postgres-service"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          # Fully qualified: CRI-O may refuse short image names.
+          image: docker.io/library/postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_DB
+            # Data goes in a subdirectory of the mount: a freshly provisioned
+            # volume root can contain lost+found, which makes initdb refuse
+            # to start ("directory exists but is not empty").
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-storage
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: 5Gi
