@@ -6,10 +6,9 @@ from starlette.routing import Mount
 
 mcp = FastMCP(
     "WeatherServer",
-    transport_security=TransportSecuritySettings(
-        enable_dns_rebinding_protection=False
-    )
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
+
 
 @mcp.tool()
 async def get_weather(location: str) -> str:
@@ -18,8 +17,9 @@ async def get_weather(location: str) -> str:
         return "Sunny and 24°C"
     return f"Partly cloudy and 18°C in {location}"
 
+
 # Extract the underlying SSE web application
-app = Starlette(routes=[Mount('/', app=mcp.sse_app())])
+app = Starlette(routes=[Mount("/", app=mcp.sse_app())])
 
 if __name__ == "__main__":
     # Explicitly define the port right here in the code

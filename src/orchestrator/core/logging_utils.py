@@ -8,7 +8,9 @@ _NOISY_LOGGERS = ("httpx", "httpcore")
 
 
 def setup_logging() -> None:
-    level_name = os.getenv("LOG_LEVEL", "INFO").upper()    # We read the log level. Default is INFO.
+    level_name = os.getenv(
+        "LOG_LEVEL", "INFO"
+    ).upper()  # We read the log level. Default is INFO.
     # Each log level is codified into an int. DEBUG(10), INFO(20), WARNING(30)...
     level = getattr(logging, level_name, logging.INFO)
     if not isinstance(level, int):

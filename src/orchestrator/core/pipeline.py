@@ -125,7 +125,9 @@ _pipeline_cache: dict[tuple[str, str], tuple[str, object]] = {}
 _pipeline_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
 
-def _cache_key(app_name: str, blueprint: GraphBlueprint, tier1_limits: FunctionalityConfig) -> str:
+def _cache_key(
+    app_name: str, blueprint: GraphBlueprint, tier1_limits: FunctionalityConfig
+) -> str:
     """
     Hashes everything that should invalidate a cached pipeline if it changes:
     the app, the blueprint, and the functionality's resolved config.
@@ -197,7 +199,9 @@ async def get_or_create_pipeline(
         cached = _pipeline_cache.get(entry_key)
         if cached is not None and cached[0] == cache_key:
             logger.debug(
-                "Pipeline cache hit for '%s/%s' (post-lock)", app_name, functionality_ref
+                "Pipeline cache hit for '%s/%s' (post-lock)",
+                app_name,
+                functionality_ref,
             )
             return cached[1]
 
@@ -305,9 +309,7 @@ async def _build_pipeline(
         ACTION_REGISTRY["retrieve_context"] = make_retrieve_context_node()
 
     # Same idea, for condition_action strings used by conditional edges.
-    CONDITION_REGISTRY = {
-        "should_continue": should_continue
-    }
+    CONDITION_REGISTRY = {"should_continue": should_continue}
 
     # 4. Build the literal Graph Structure based on the Tier 2 Blueprint
     builder = StateGraph(State)
@@ -330,15 +332,15 @@ async def _build_pipeline(
         if edge.is_conditional:
             condition_func = CONDITION_REGISTRY.get(edge.condition_action)
             if not condition_func:
-                raise ValueError(f"Unknown condition '{edge.condition_action}' in blueprint.")
+                raise ValueError(
+                    f"Unknown condition '{edge.condition_action}' in blueprint."
+                )
             # Hardcoded mapping - see the NOTE on should_continue above and
             # EdgeDef's docstring in schemas.py. Every conditional edge in
             # the project is currently forced through this same two-outcome
             # mapping, regardless of which condition_action it names.
             builder.add_conditional_edges(
-                edge.source,
-                condition_func,
-                {"execute_tools": edge.target, END: END}
+                edge.source, condition_func, {"execute_tools": edge.target, END: END}
             )
         else:
             builder.add_edge(edge.source, edge.target)

@@ -11,14 +11,10 @@ logger = logging.getLogger(__name__)
 
 
 class ModelOllama(IModel):
-    
     def __init__(self, model_name: str):
-        
+
         self.model_name = model_name
-        self.llm = ChatOllama(
-            model=model_name,
-            temperature=0.5
-        )
+        self.llm = ChatOllama(model=model_name, temperature=0.5)
         logger.debug("Initialised ChatOllama model '%s'", model_name)
 
     def bind_tools(self, tools: list[any]) -> None:
@@ -27,7 +23,7 @@ class ModelOllama(IModel):
             logger.debug("Bound %d tool(s) to '%s'", len(tools), self.model_name)
 
     def generate(self, state: State, context_id: str | None = None):
-        
+
         messages = state["messages"]
         context = state.get("context", {})
         has_context = context_id in context

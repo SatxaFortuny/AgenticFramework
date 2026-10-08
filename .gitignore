@@ -6,3 +6,9 @@ __pycache__/
 *.tar
 *.egg-info/
 .pytest_cache/
+.vscode/
+gather_code.sh
+output.txt
+orchestrator.tar
+tools.tar
+chroma.tar

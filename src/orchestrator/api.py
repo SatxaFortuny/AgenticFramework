@@ -73,12 +73,16 @@ async def chat_with_bot(
     bundle = app_registry[app]
     blueprint = bundle.blueprints[functionality]
 
-    graph = await get_or_create_pipeline(app, blueprint, bundle.app_config, checkpointer)
+    graph = await get_or_create_pipeline(
+        app, blueprint, bundle.app_config, checkpointer
+    )
 
     start = time.perf_counter()
     logger.info(
         "Graph execution started (app=%s, functionality=%s, conversation_id=%s)",
-        app, functionality, conversation_id,
+        app,
+        functionality,
+        conversation_id,
     )
     # thread_id == conversation_id: this is what lets the shared checkpointer
     # accumulate this conversation's message history across separate /chat
@@ -101,6 +105,7 @@ class ChatRequest(BaseModel):
     conversation_id). Validating that here instead would duplicate the
     rules already in core/routing.py.
     """
+
     message: str
     conversation_id: str | None = None
     app: str | None = None
@@ -110,8 +115,8 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     conversation_id: str  # always present in the response, even if the
-                           # request didn't send one - the client should
-                           # store this and reuse it for the next message.
+    # request didn't send one - the client should
+    # store this and reuse it for the next message.
 
 
 app = FastAPI(title="Agentic Framework Orchestrator", lifespan=lifespan)
@@ -158,7 +163,12 @@ async def chat_endpoint(request: ChatRequest, http_request: Request):
         # RoutingError already carries the right HTTP status (400/404/409 -
         # see core/routing.py), so this just forwards it rather than
         # re-deriving one from the error message.
-        logger.warning("Routing error (%d) after %.0f ms: %s", e.status_code, elapsed_ms(start), e.detail)
+        logger.warning(
+            "Routing error (%d) after %.0f ms: %s",
+            e.status_code,
+            elapsed_ms(start),
+            e.detail,
+        )
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
     try:
@@ -176,7 +186,9 @@ async def chat_endpoint(request: ChatRequest, http_request: Request):
             elapsed_ms(start),
         )
         logger.debug("Response message: %s", preview(response_text))
-        return ChatResponse(response=response_text, conversation_id=session.conversation_id)
+        return ChatResponse(
+            response=response_text, conversation_id=session.conversation_id
+        )
     except ValueError as e:
         # Config/blueprint validation errors are client-facing (bad
         # functionality_ref, missing vectordb for a retrieve_context node,

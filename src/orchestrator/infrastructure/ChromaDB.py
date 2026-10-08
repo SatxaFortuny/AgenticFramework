@@ -16,8 +16,8 @@ externally (see EmbedModelOllama) and passed in already-chunked. This keeps
 the embedding backend swappable independently of the vector store backend.
 """
 
-class ChromaDB(IVectorDB):
 
+class ChromaDB(IVectorDB):
     def __init__(self, collection_name: str):
         chroma_host = os.getenv("CHROMA_HOST", "chromadb-service")
         chroma_port = os.getenv("CHROMA_PORT", "8000")
@@ -27,7 +27,9 @@ class ChromaDB(IVectorDB):
         try:
             # Connect over the internal Kubernetes network instead of local files
             self.chroma_client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
-            self.collection = self.chroma_client.get_or_create_collection(name=collection_name)
+            self.collection = self.chroma_client.get_or_create_collection(
+                name=collection_name
+            )
         except Exception as exc:
             logger.error(
                 "ChromaDB connection failed at %s:%s (collection=%s) after %.0f ms: %s",

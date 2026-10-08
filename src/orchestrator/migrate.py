@@ -5,6 +5,7 @@ several pods - run_migrations() serialises them with an advisory lock.
 
     python migrate.py
 """
+
 import asyncio
 import logging
 import sys

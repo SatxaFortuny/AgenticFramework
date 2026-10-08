@@ -10,12 +10,14 @@ class SessionRecord:
     functionality: str
     created_at: float
 
+
 class SessionStore(ABC):
     # We are using async because in order to account for future slow I/O.
     @abstractmethod
     async def get(self, conversation_id: str) -> SessionRecord | None: ...
     @abstractmethod
     async def set(self, conversation_id: str, record: SessionRecord) -> None: ...
+
 
 class InMemorySessionStore(SessionStore):
     """

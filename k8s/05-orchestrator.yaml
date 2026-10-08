@@ -26,6 +26,26 @@ spec:
         app: orchestrator
     spec:
       initContainers:
+        # Rebuilds the nested configs/ tree from the flat ConfigMap keys.
+        # A key such as "greeting_finance_app__functionalities__finance_bot.yaml"
+        # becomes /app/configs/greeting_finance_app/functionalities/finance_bot.yaml.
+        # Adding an app or functionality now only means adding one line to
+        # kustomization.yaml - no volume/item list to maintain here.
+        - name: build-config-tree
+          image: localhost/af-orchestrator:latest   # reuse our image, no extra pull
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              for f in /cm/*; do
+                rel=$(basename "$f" | sed 's#__#/#g')
+                mkdir -p "/out/$(dirname "$rel")"
+                cp "$f" "/out/$rel"
+              done
+          volumeMounts:
+            - { name: agent-configs, mountPath: /cm }
+            - { name: configs, mountPath: /out }
         # Creates/upgrades the database schema before the app starts. Runs
         # once per pod start; with several replicas starting together they
         # serialise on a Postgres advisory lock (core/persistence.py), so this
@@ -112,6 +132,10 @@ spec:
                 secretKeyRef:
                   name: groq-credentials
                   key: GROQ_API_KEY
+          volumeMounts:
+            - name: configs
+              mountPath: /app/configs
+              readOnly: true
           # /healthz = process is up (never touches the DB, so a database
           # outage can't get pods restarted). /readyz = can reach Postgres;
           # failing it just removes the pod from the Service until it recovers.
@@ -134,45 +158,9 @@ spec:
               port: 8000
             periodSeconds: 10
             timeoutSeconds: 3
-          volumeMounts:
-            # CHANGED: three flat mounts instead of one nested-path volume.
-            # CRI-O (this cluster's --container-runtime=crio) has a known bug
-            # creating ConfigMap volume mounts whose items[].path contains a
-            # "/" - it fails with "openat2: No such file or directory" even
-            # trying to create the outer mountPath. Splitting into one volume
-            # per subdirectory, each with flat (no-slash) item paths, avoids
-            # that entirely: the nesting comes from three separate mountPaths
-            # instead of slashes inside a single volume's items.
-            - name: app-yaml-volume
-              mountPath: /app/configs/greeting_finance_app
-            - name: functionalities-volume
-              mountPath: /app/configs/greeting_finance_app/functionalities
-            - name: blueprints-volume
-              mountPath: /app/configs/greeting_finance_app/blueprints
       volumes:
-        - name: app-yaml-volume
+        - name: agent-configs
           configMap:
             name: agent-configs
-            items:
-              - key: app.yaml
-                path: app.yaml
-        - name: functionalities-volume
-          configMap:
-            name: agent-configs
-            items:
-              - key: functionalities-greeting_bot.yaml
-                path: greeting_bot.yaml
-              - key: functionalities-finance_bot.yaml
-                path: finance_bot.yaml
-        - name: blueprints-volume
-          configMap:
-            name: agent-configs
-            items:
-              - key: blueprints-greeting_bot.yaml
-                path: greeting_bot.yaml
-              - key: blueprints-finance_bot.yaml
-                path: finance_bot.yaml
-      # TODO: adding a new app or functionality still means touching both
-      # kustomization.yaml (the ConfigMap keys) and this file (which volume/
-      # item each key lands in). Same manual-duplication note as before -
-      # a Helm chart or generator script (Batch 7) is the real fix.
+        - name: configs
+          emptyDir: {}

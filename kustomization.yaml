@@ -25,8 +25,8 @@ resources:
 configMapGenerator:
   - name: agent-configs
     files:
-      - app.yaml=configs/greeting_finance_app/app.yaml
-      - functionalities-greeting_bot.yaml=configs/greeting_finance_app/functionalities/greeting_bot.yaml
-      - functionalities-finance_bot.yaml=configs/greeting_finance_app/functionalities/finance_bot.yaml
-      - blueprints-greeting_bot.yaml=configs/greeting_finance_app/blueprints/greeting_bot.yaml
-      - blueprints-finance_bot.yaml=configs/greeting_finance_app/blueprints/finance_bot.yaml
+      - greeting_finance_app__app.yaml=configs/greeting_finance_app/app.yaml
+      - greeting_finance_app__functionalities__greeting_bot.yaml=configs/greeting_finance_app/functionalities/greeting_bot.yaml
+      - greeting_finance_app__functionalities__finance_bot.yaml=configs/greeting_finance_app/functionalities/finance_bot.yaml
+      - greeting_finance_app__blueprints__greeting_bot.yaml=configs/greeting_finance_app/blueprints/greeting_bot.yaml
+      - greeting_finance_app__blueprints__finance_bot.yaml=configs/greeting_finance_app/blueprints/finance_bot.yaml

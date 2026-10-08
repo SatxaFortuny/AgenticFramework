@@ -37,16 +37,12 @@ MODEL_REGISTRY = {
     "groq": ModelGroq,
 }
 
-VECTORDB_REGISTRY = {
-    "chromadb": ChromaDB
-}
+VECTORDB_REGISTRY = {"chromadb": ChromaDB}
 
 # Keyed by embedding provider, independent from VECTORDB_REGISTRY's keys, so
 # a vectordb backend and an embedding backend can be swapped independently
 # of each other (e.g. Chroma paired with an OpenAI embedder).
-EMBEDDING_REGISTRY = {
-    "ollama": EmbedModelOllama
-}
+EMBEDDING_REGISTRY = {"ollama": EmbedModelOllama}
 
 
 def create_model(config: ModelConfig) -> IModel:
@@ -128,10 +124,7 @@ async def get_filtered_mcp_tools(config: FunctionalityConfig):
         raise
 
     # The actual security filter: drop every tool not explicitly allowed.
-    safe_tools = [
-        tool for tool in all_raw_tools
-        if tool.name in allowed_tool_names
-    ]
+    safe_tools = [tool for tool in all_raw_tools if tool.name in allowed_tool_names]
 
     logger.info(
         "MCP tools: discovered=%d allowed=%d in %.0f ms",
@@ -149,6 +142,8 @@ async def get_filtered_mcp_tools(config: FunctionalityConfig):
     # agent silently has one fewer capability than the config intended.
     missing = allowed_tool_names - {tool.name for tool in all_raw_tools}
     if missing:
-        logger.warning("Allowed MCP tools not exposed by any server: %s", sorted(missing))
+        logger.warning(
+            "Allowed MCP tools not exposed by any server: %s", sorted(missing)
+        )
 
     return safe_tools

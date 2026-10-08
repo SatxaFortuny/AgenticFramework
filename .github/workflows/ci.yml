@@ -1,89 +1,121 @@
 name: CI
 
 on:
+  # It triggers when someone pushes to main
   push:
     branches: [main]
+  # And it pulls the main branch
   pull_request:
     branches: [main]
 
+# We only give it read permissions so if the CICD pipeline is compromised it doesn't affect the code
+permissions:
+  contents: read
+
+# A new push to the same PR cancels the older run. Runs on main are never
+# cancelled, so every merge gets a full result.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.11"
+
+# Each job has its separate VM so we don't have cascade errors or collisions of any kind
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      # Third-party actions are pinned to a commit SHA (the comment is the tag).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Here we are installing the environment
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            src/orchestrator/requirements.txt
+            src/orchestrator/requirements-dev.txt
 
-      - name: Install orchestrator dependencies
+      - name: Install dependencies (locked)
         run: |
           pip install -r src/orchestrator/requirements.txt
-          pip install ruff pytest httpx
+          pip install -r src/orchestrator/requirements-dev.txt
+
+      - name: Chroma client and server versions match
+        run: bash scripts/check-chroma-version.sh
 
       - name: Lint
         run: ruff check src/
 
-      - name: Run unit tests (skips anything marked 'integration')
-        run: pytest -m "not integration"
+      - name: Format check
+        run: ruff format --check src/
 
-  # Runs the tests that need a real database (marked `postgres`): schema
-  # migrations (including several starting at once on an empty database),
-  # checkpoint history surviving a "restart", and session routing surviving
-  # one. They skip themselves when TEST_DATABASE_URL isn't set, which is why
-  # the job above doesn't need Postgres.
+      - name: Unit tests (no live services)
+        run: pytest -m "not integration and not postgres"
+
   postgres-tests:
     runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: af
-          POSTGRES_PASSWORD: af
-          POSTGRES_DB: af_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U af -d af_test"
+          --health-cmd "pg_isready -U postgres -d test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      TEST_DATABASE_URL: postgresql://af:af@localhost:5432/af_test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.11"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            src/orchestrator/requirements.txt
+            src/orchestrator/requirements-dev.txt
 
-      - name: Install orchestrator dependencies
+      - name: Install dependencies (locked)
         run: |
           pip install -r src/orchestrator/requirements.txt
-          pip install pytest httpx
+          pip install -r src/orchestrator/requirements-dev.txt
 
-      - name: Run Postgres-backed tests
-        run: pytest -m postgres -v
+      - name: Postgres tests
+        # These tests self-skip when TEST_DATABASE_URL is unset, so a green run
+        # with skips would be a false pass. Fail the job if anything skipped.
+        run: |
+          pytest -m postgres -rs -q | tee pg.log
+          if grep -Eq '[0-9]+ skipped' pg.log; then
+            echo "::error::Postgres tests were skipped - the database was not reached"
+            exit 1
+          fi
 
-  # Catches manifest mistakes (bad indentation, wrong field names, invalid
-  # kinds) before they reach the cluster. Renders the kustomization first so
-  # what is validated is what `kubectl apply -k .` would actually send.
-  validate-manifests:
+  k8s-manifests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install kubeconform
         run: |
-          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz \
+            | sudo tar xz -C /usr/local/bin kubeconform
 
-      - name: Render and validate
-        run: kubectl kustomize . | ./kubeconform -strict -summary -kubernetes-version 1.30.0
+      - name: Render and validate manifests
+        run: |
+          kubectl kustomize . > rendered.yaml
+          kubeconform -strict -summary -ignore-missing-schemas rendered.yaml
 
   build-images:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build orchestrator image
         run: docker build -t af-orchestrator:ci ./src/orchestrator

@@ -1,6 +1,7 @@
 """
 In this file we define the data types and we also handle the translation from a config file to a data type, which are python classes. We accomplish this with pydantic.
 """
+
 import os
 import re
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ def _expand_env_vars(value):
     """
 
     if isinstance(value, str):
+
         def _replace(match: re.Match) -> str:
             # Split the placeholder into the variable name and its default.
             var_name, default = match.groups()
@@ -82,10 +84,12 @@ The configuration is split into 3 tiers:
 
 # --- TIER 2: Graph Blueprint Schemas ---
 
+
 class NodeDef(BaseModel):
     """One step of the graph."""
-    id: str        # unique name of the node.
-    action: str    # id of the action the node does. The actions are in ACTION_REGISTRY (core/pipeline.py).
+
+    id: str  # unique name of the node.
+    action: str  # id of the action the node does. The actions are in ACTION_REGISTRY (core/pipeline.py).
 
 
 class EdgeDef(BaseModel):
@@ -106,16 +110,17 @@ class EdgeDef(BaseModel):
     condition_value field), which is what would be needed to support more
     than one kind of conditional routing.
     """
+
     source: str
     target: str
-    is_conditional: bool = False        # Must be a bool. Default to False.
-    condition_action: str | None = None # Can be a string or None. Default to None.
+    is_conditional: bool = False  # Must be a bool. Default to False.
+    condition_action: str | None = None  # Can be a string or None. Default to None.
 
 
 class GraphBlueprint(BaseModel):
     name: str
-    functionality_ref: str    # name of the functionality this graph belongs to
-    entry_point: str          # the id of the first node
+    functionality_ref: str  # name of the functionality this graph belongs to
+    entry_point: str  # the id of the first node
     nodes: list[NodeDef]
     edges: list[EdgeDef]
 
@@ -160,6 +165,7 @@ class GraphBlueprint(BaseModel):
 
 # --- TIER 1: Infrastructure & Security Schemas ---
 
+
 class EmbeddingConfig(BaseModel):
     """
     Which embedding backend turns text into vectors (see IEmbeddingModel) and
@@ -182,6 +188,7 @@ class EmbeddingConfig(BaseModel):
     different version, vectors stored earlier no longer match new ones -
     pin a specific version in the YAML to avoid that.
     """
+
     provider: str
     model_name: str
 
@@ -195,6 +202,7 @@ class VectorDBConfig(BaseModel):
     - collection_name: the named group of documents inside the database
       (roughly like a table). Each bot uses its own, e.g. "financial_reports".
     """
+
     provider: str
     collection_name: str
 
@@ -206,6 +214,7 @@ class MCPServerConfig(BaseModel):
     implements swappability by itself, so we would be doing an unnecessary
     double compatibility layer.
     """
+
     server_name: str
     url: str
     # No default: a typo here used to pass validation silently (plain str)
@@ -215,7 +224,9 @@ class MCPServerConfig(BaseModel):
     # "streamable_http" here would pass config validation but fail at
     # runtime until the servers themselves support it too.
     transport: Literal["sse", "streamable_http"]
-    allowed_tools: list[str]    # For security reasons, only the listed tools here will be the ones used by the agents.
+    allowed_tools: list[
+        str
+    ]  # For security reasons, only the listed tools here will be the ones used by the agents.
 
 
 class ModelConfig(BaseModel):
@@ -248,6 +259,7 @@ class FunctionalityConfig(BaseModel):
     yet, so it only holds because each functionality currently has at most
     one of each.
     """
+
     embedding: list[EmbeddingConfig] = []
     vectordb: list[VectorDBConfig] = []
     tools: list[MCPServerConfig] = []
@@ -272,12 +284,16 @@ class FunctionalityConfig(BaseModel):
             # model_copy() clones this object with one field replaced,
             # rather than mutating self in place - the original parsed-from-
             # YAML object may still be referenced elsewhere.
-            return self.model_copy(update={
-                "models": [ModelConfig(
-                    provider=defaults.model.provider,
-                    model_name=defaults.model.model_name,
-                )]
-            })
+            return self.model_copy(
+                update={
+                    "models": [
+                        ModelConfig(
+                            provider=defaults.model.provider,
+                            model_name=defaults.model.model_name,
+                        )
+                    ]
+                }
+            )
         return self
 
 
@@ -289,10 +305,12 @@ class AppConfig(BaseModel):
     just the list of names declared in app.yaml, before any functionality
     file has even been read.
     """
+
     functionalities: dict[str, FunctionalityConfig]
 
 
 # --- App-level (Tier 0) schema ---
+
 
 class ModelDefaults(BaseModel):
     provider: str | None = None
@@ -316,6 +334,7 @@ class AppMetaConfig(BaseModel):
       aren't listed here are ignored.
     - defaults: values inherited by the functionalities (see AppDefaults).
     """
+
     name: str
     description: str = ""
     functionalities: list[str]
@@ -330,12 +349,14 @@ class AppBundle:
     were already validated (AppMetaConfig, AppConfig, each GraphBlueprint) -
     there is nothing left to parse here.
     """
-    meta: AppMetaConfig                    # Tier 0
-    app_config: AppConfig                  # Tier 1
+
+    meta: AppMetaConfig  # Tier 0
+    app_config: AppConfig  # Tier 1
     blueprints: dict[str, GraphBlueprint]  # Tier 2
 
 
 # --- Loaders ---
+
 
 def load_blueprint(yaml_path: str) -> GraphBlueprint:
     """Reads one blueprint file, builds a GraphBlueprint and validates it."""
@@ -430,7 +451,9 @@ def load_app(app_dir: str) -> AppBundle:
         # not just vectordb. This is the only place the blueprint (Tier 2)
         # and the functionality's own config (Tier 1) are both available
         # together, which is why this check can't live in validate_structure().
-        needs_vectordb = any(node.action == "retrieve_context" for node in blueprint.nodes)
+        needs_vectordb = any(
+            node.action == "retrieve_context" for node in blueprint.nodes
+        )
         if needs_vectordb and not effective_config.vectordb:
             raise ValueError(
                 f"Blueprint '{blueprint.name}' (functionality="

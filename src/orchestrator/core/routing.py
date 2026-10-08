@@ -7,10 +7,12 @@ from core.session_store import SessionStore, new_session_record
 
 class RoutingError(Exception):
     """Carries an HTTP-appropriate status_code so api.py doesn't have to re-derive one from the message text."""
+
     def __init__(self, status_code: int, detail: str):
         super().__init__(detail)
         self.status_code = status_code
         self.detail = detail
+
 
 # Since the atributes will never change we can freeze the instance for security
 @dataclass(frozen=True)
@@ -21,13 +23,17 @@ class ResolvedSession:
     is_new: bool
 
 
-def _validate_app_and_functionality(app: str, functionality: str, app_registry: dict[str, AppBundle]) -> None:
+def _validate_app_and_functionality(
+    app: str, functionality: str, app_registry: dict[str, AppBundle]
+) -> None:
     # AppBundle is the object with all the configurations attached to it.
     bundle = app_registry.get(app)
     if bundle is None:
         raise RoutingError(404, f"Unknown app '{app}'.")
     if functionality not in bundle.app_config.functionalities:
-        raise RoutingError(404, f"Unknown functionality '{functionality}' for app '{app}'.")
+        raise RoutingError(
+            404, f"Unknown functionality '{functionality}' for app '{app}'."
+        )
 
 
 async def resolve_session(
@@ -90,7 +96,9 @@ async def resolve_session(
 
     # Here we are generating an id if it doesn't exist. This could theoretically produce collisions but the chances are infinitesimally low. But further it can be reinfornced.
     resolved_conversation_id = conversation_id or str(uuid.uuid4())
-    await session_store.set(resolved_conversation_id, new_session_record(app, functionality))
+    await session_store.set(
+        resolved_conversation_id, new_session_record(app, functionality)
+    )
     return ResolvedSession(
         app=app,
         functionality=functionality,
