@@ -1,0 +1,54 @@
+# Rendered by the nginx image's entrypoint (envsubst, restricted to
+# GROQ_API_KEY by NGINX_ENVSUBST_FILTER, so nginx's own $variables survive).
+#
+# A narrow reverse proxy to Groq: the orchestrator talks plain HTTP to this
+# pod, which adds the real API key and forwards over verified TLS. Nothing else
+# in the cluster holds the key, and the gateway only ever talks to one host.
+
+# api.groq.com's addresses change. A literal proxy_pass would resolve them once
+# at start-up and keep them for the life of the pod, so resolve per request
+# (cached 30s) through the cluster DNS instead.
+resolver kube-dns.kube-system.svc.cluster.local valid=30s ipv6=off;
+
+server {
+    listen 8080;
+    server_name _;
+
+    client_max_body_size 10m;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # The only path the orchestrator needs (the OpenAI-compatible API).
+    location /openai/v1/ {
+        limit_except GET POST { deny all; }
+
+        set $groq_upstream https://api.groq.com;
+        proxy_pass $groq_upstream;
+
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host api.groq.com;
+        # Replaces whatever the caller sent: the orchestrator's key is a placeholder.
+        proxy_set_header Authorization "Bearer ${GROQ_API_KEY}";
+
+        proxy_ssl_server_name on;
+        proxy_ssl_name api.groq.com;
+        proxy_ssl_verify on;
+        proxy_ssl_verify_depth 3;
+        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+
+        # Completions can stream; do not hold them back.
+        proxy_buffering off;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 120s;
+    }
+
+    location / {
+        return 404;
+    }
+}

@@ -1,0 +1,108 @@
+# Nightly logical backup (pg_dump custom format), keeping the last 7.
+#
+# IMPORTANT: this PVC lives on the same machine as the database. It protects
+# against `DROP TABLE` and corruption, not against losing the disk. Copy the
+# dumps somewhere else too, e.g.:
+#   kubectl exec <backup-pod> ... / kubectl cp, or mount an NFS/S3-backed
+#   volume here instead.
+#
+# Restore test (do it once - an untested backup is a hope, not a backup):
+#   pg_restore --clean --if-exists --no-owner -d <db> <file>.dump
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backups
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app: postgres-backup
+        spec:
+          serviceAccountName: postgres-backup
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            runAsGroup: 70
+            fsGroup: 70
+            fsGroupChangePolicy: OnRootMismatch
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              image: docker.io/library/postgres:16-alpine
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: PGHOST
+                  value: "conversation-db"
+                - name: PGPORT
+                  value: "5432"
+                - name: PGUSER
+                  value: "af_backup"
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: db-role-credentials
+                      key: BACKUP_PASSWORD
+                - name: PGDATABASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: db-role-credentials
+                      key: DB_NAME
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -e
+                  f="/backups/$PGDATABASE-$(date +%Y%m%d-%H%M%S).dump"
+                  pg_dump -Fc -f "$f"
+                  echo "wrote $f ($(du -h "$f" | cut -f1))"
+                  # keep the 7 newest
+                  ls -1t /backups/*.dump | tail -n +8 | xargs -r rm -f
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: postgres-backups
+            - name: tmp
+              emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres-backup
+# Identity only: no RBAC is granted and no token is mounted into the pod.
+automountServiceAccountToken: false

@@ -1,0 +1,178 @@
+# Both MCP servers run the same image (af-tools); the command picks the
+# script. Setting `command` here (instead of the SERVER_SCRIPT env var) makes
+# Python the container's main process, so it receives SIGTERM directly.
+#
+# TCP probes on purpose: the servers speak SSE, so an HTTP GET on /sse would
+# open a stream and never return.
+#
+# Weather MCP Deployment & Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: weather-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: weather-mcp
+  template:
+    metadata:
+      labels:
+        app: weather-mcp
+    spec:
+      serviceAccountName: weather-mcp
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: weather-mcp
+          image: localhost/af-tools:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "servers/weather_server.py"]
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: HOME
+              value: /tmp
+          ports:
+            - containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 2
+            failureThreshold: 15
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 15
+            failureThreshold: 4
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tool-weather
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+  selector:
+    app: weather-mcp
+---
+# Finance MCP Deployment & Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finance-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: finance-mcp
+  template:
+    metadata:
+      labels:
+        app: finance-mcp
+    spec:
+      serviceAccountName: finance-mcp
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: finance-mcp
+          image: localhost/af-tools:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "servers/finance_server.py"]
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: HOME
+              value: /tmp
+          ports:
+            - containerPort: 8001
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            tcpSocket:
+              port: 8001
+            periodSeconds: 2
+            failureThreshold: 15
+          readinessProbe:
+            tcpSocket:
+              port: 8001
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8001
+            periodSeconds: 15
+            failureThreshold: 4
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tool-finance
+spec:
+  ports:
+    - port: 8001
+      targetPort: 8001
+  selector:
+    app: finance-mcp
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: weather-mcp
+# Identity only: no RBAC is granted and no token is mounted into the pod.
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: finance-mcp
+# Identity only: no RBAC is granted and no token is mounted into the pod.
+automountServiceAccountToken: false

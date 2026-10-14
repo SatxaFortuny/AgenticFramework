@@ -1,0 +1,126 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vector-store
+spec:
+  ports:
+    - port: 8000
+      targetPort: 8000
+  selector:
+    app: chromadb
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: chromadb
+spec:
+  serviceName: "vector-store"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chromadb
+  template:
+    metadata:
+      labels:
+        app: chromadb
+    spec:
+      serviceAccountName: chromadb
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # fsGroup is not applied on hostPath-backed volumes (minikube), so a
+        # root-owned PVC would leave Chroma's SQLite file read-only for UID
+        # 10001 ("attempt to write a readonly database"). Fix ownership first;
+        # the main container stays non-root. See docs/runbook.md.
+        - name: fix-permissions
+          image: localhost/af-chroma:latest
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "chown -R 10001:10001 /chroma/chroma"]
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: chroma-storage
+              mountPath: /chroma/chroma
+      containers:
+        - name: chromadb
+          image: localhost/af-chroma:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            # No outbound telemetry (also keeps egress rules simple later).
+            - name: ANONYMIZED_TELEMETRY
+              value: "False"
+            - name: HOME
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # TCP probes on purpose: Chroma's HTTP heartbeat path changed
+          # between API versions, and the server version was just bumped.
+          startupProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 15
+            failureThreshold: 4
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: chroma-storage
+              mountPath: /chroma/chroma
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: chroma-storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chromadb
+# Identity only: no RBAC is granted and no token is mounted into the pod.
+automountServiceAccountToken: false

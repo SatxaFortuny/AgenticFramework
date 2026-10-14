@@ -1,0 +1,45 @@
+name: Network policies
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+env:
+  # Pin and bump deliberately, like the actions below.
+  CALICO_VERSION: v3.30.2
+jobs:
+  policy-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: kind cluster without the default CNI
+        run: |
+          cat > kind.yaml <<'YAML'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          networking:
+            disableDefaultCNI: true
+            podSubnet: 192.168.0.0/16
+          YAML
+          kind create cluster --config kind.yaml
+      - name: Install Calico (enforces NetworkPolicy)
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/calico.yaml
+          kubectl -n kube-system rollout status ds/calico-node --timeout=240s
+          kubectl -n kube-system rollout status deploy/coredns --timeout=240s
+      - name: Apply namespaces and the NetworkPolicies rendered from the dev overlay
+        run: |
+          pip install pyyaml >/dev/null
+          kubectl apply -k k8s/base/namespaces
+          kubectl kustomize k8s/overlays/dev > rendered.yaml
+          python3 -c "
+          import yaml
+          docs = [d for d in yaml.safe_load_all(open('rendered.yaml')) if d and d['kind'] == 'NetworkPolicy']
+          open('netpol.yaml', 'w').write(yaml.safe_dump_all(docs))
+          "
+          kubectl apply -f netpol.yaml
+      - name: Policy tests
+        run: STUBS=1 INTERNET=1 ./scripts/04-test-policies.sh

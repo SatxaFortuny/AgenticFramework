@@ -1,0 +1,19 @@
+# NOT part of the base. Apply only while pulling models, then delete:
+#   kubectl apply -f k8s/optional/ollama-pull-egress.yaml
+#   kubectl -n models exec -it deploy/ollama -- ollama pull llama3.1:8b
+#   kubectl delete -f k8s/optional/ollama-pull-egress.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ollama-pull-egress
+  namespace: models
+spec:
+  podSelector:
+    matchLabels: {app: ollama}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+      ports: [{protocol: TCP, port: 443}]

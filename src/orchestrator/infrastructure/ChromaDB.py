@@ -19,7 +19,7 @@ the embedding backend swappable independently of the vector store backend.
 
 class ChromaDB(IVectorDB):
     def __init__(self, collection_name: str):
-        chroma_host = os.getenv("CHROMA_HOST", "chromadb-service")
+        chroma_host = os.getenv("CHROMA_HOST", "vector-store.data.svc.cluster.local")
         chroma_port = os.getenv("CHROMA_PORT", "8000")
         self.collection_name = collection_name
 

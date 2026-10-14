@@ -26,7 +26,7 @@ other is worse than both stale.
 1. **Postgres for both**, one database, one shared connection pool
    (`core/persistence.py`): `AsyncPostgresSaver` for checkpoints and a new
    `PostgresSessionStore` behind the existing `SessionStore` interface. Postgres
-   is a plain backing service (StatefulSet + PVC, `k8s/01-postgres.yaml`), not
+   is a plain backing service (StatefulSet + PVC, `k8s/base/data/postgres.yaml`), not
    a service we write. The orchestrator becomes stateless.
 
 2. **Setup moves out of import time into a FastAPI `lifespan`**, because the

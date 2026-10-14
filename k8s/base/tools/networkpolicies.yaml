@@ -1,0 +1,56 @@
+# Network policies for the tools zone (ADR 0006). Both MCP servers are simulated
+# today (no external calls), so neither has any egress except DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# DNS for everyone (every pod resolves the *.svc.cluster.local names in its env).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: weather-mcp-ingress
+spec:
+  podSelector:
+    matchLabels: {app: weather-mcp}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: app}}
+          podSelector: {matchLabels: {app: orchestrator}}
+      ports: [{protocol: TCP, port: 8000}]
+---
+# finance-mcp (the strictest): one caller, one port, no egress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: finance-mcp-ingress
+spec:
+  podSelector:
+    matchLabels: {app: finance-mcp}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: app}}
+          podSelector: {matchLabels: {app: orchestrator}}
+      ports: [{protocol: TCP, port: 8001}]

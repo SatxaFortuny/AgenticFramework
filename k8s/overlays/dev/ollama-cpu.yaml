@@ -1,0 +1,18 @@
+# CPU-mode sizing: the GPU is not visible to minikube, so the chat and
+# embedding models run on the CPU and need much more RAM and CPU.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: models
+spec:
+  template:
+    spec:
+      containers:
+        - name: ollama
+          resources:
+            requests:
+              cpu: "4"
+              memory: 6Gi
+            limits:
+              memory: 8Gi

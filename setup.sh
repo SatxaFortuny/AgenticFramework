@@ -10,16 +10,30 @@ else
     echo "Minikube already started"
 fi
 
+# The Secrets live inside the namespaces, so the namespaces come first.
+# (Idempotent: the same objects are part of the full apply below.)
+echo "Creating namespaces"
+kubectl apply -k k8s/base/namespaces
+
 # Fail fast with an actionable message instead of a pod stuck in
 # CreateContainerConfigError (a missing Secret or key only shows up at
 # container-create time, not at `kubectl apply` - see the postmortem,
-# Incident 3).
-for secret in groq-credentials postgres-credentials; do
-    if ! kubectl get secret "$secret" > /dev/null 2>&1; then
-        echo "ERROR: Secret '$secret' not found. Create it first - see the README (Quick start, step 1)."
-        exit 1
+# Incident 3). Each credential exists only in the namespace that uses it.
+missing=0
+require_secret() {
+    if ! kubectl -n "$1" get secret "$2" > /dev/null 2>&1; then
+        echo "ERROR: Secret '$2' not found in namespace '$1'."
+        missing=1
     fi
-done
+}
+require_secret models groq-credentials
+require_secret data postgres-credentials
+require_secret data db-role-credentials
+require_secret app db-role-credentials
+if [ "$missing" -ne 0 ]; then
+    echo "Create the missing Secrets first - see the README (Quick start, step 1)."
+    exit 1
+fi
 
 echo "Building orchestrator image"
 podman build -t af-orchestrator:latest ./src/orchestrator
@@ -47,7 +61,7 @@ minikube image load chroma.tar --overwrite
 rm orchestrator.tar tools.tar chroma.tar
 
 echo "Applying manifests"
-kubectl apply -k .
+kubectl apply -k k8s/overlays/dev
 
 # CHANGED: kubectl apply alone won't restart a Deployment whose pod spec
 # didn't change (same image tag, same manifest) even if the image *content*
@@ -55,6 +69,7 @@ kubectl apply -k .
 # again after a code change" reliably pick up the new image instead of
 # depending on kubelet noticing on its own.
 echo "Restarting deployments to pick up freshly loaded images"
-kubectl rollout restart deployment orchestrator weather-mcp finance-mcp
+kubectl -n app rollout restart deployment orchestrator
+kubectl -n tools rollout restart deployment weather-mcp finance-mcp
 
 echo "Deployment complete"

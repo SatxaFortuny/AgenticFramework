@@ -1,0 +1,28 @@
+# Generates the agent-configs ConfigMap from the app config tree. It lives
+# next to the files it reads because kustomize only lets a generator read
+# files inside its own directory (and Flux/Argo CD enforce that too). The
+# k8s/base/app kustomization includes this directory as a resource, so
+# nothing under configs/ had to move and local dev (uvicorn reading
+# ./configs, the tests) is unaffected: discover_apps() only looks at
+# subdirectories that contain an app.yaml, so this file is ignored.
+#
+# A ConfigMap has no subdirectories: every file becomes one flat key. Names
+# are "<app>__<kind>__<file>" because functionalities/greeting_bot.yaml and
+# blueprints/greeting_bot.yaml would otherwise collide. The orchestrator's
+# build-config-tree init container turns "__" back into "/" at startup, so
+# adding a file here is the only step needed - no volume item to add in the
+# Deployment.
+#
+# Adding a new app or functionality: add its files under configs/ and one
+# line below.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+configMapGenerator:
+  - name: agent-configs
+    files:
+      - greeting_finance_app__app.yaml=greeting_finance_app/app.yaml
+      - greeting_finance_app__functionalities__greeting_bot.yaml=greeting_finance_app/functionalities/greeting_bot.yaml
+      - greeting_finance_app__functionalities__finance_bot.yaml=greeting_finance_app/functionalities/finance_bot.yaml
+      - greeting_finance_app__blueprints__greeting_bot.yaml=greeting_finance_app/blueprints/greeting_bot.yaml
+      - greeting_finance_app__blueprints__finance_bot.yaml=greeting_finance_app/blueprints/finance_bot.yaml

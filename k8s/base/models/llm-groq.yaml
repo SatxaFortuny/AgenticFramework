@@ -1,0 +1,112 @@
+# Gateway to the Groq API (see llm-groq.conf.template). It lives in `models`
+# next to Ollama: both are "where the LLM runs", and this is the only pod in
+# the cluster that holds the Groq key or needs the internet.
+#
+# The key is created by hand, in this namespace only:
+#
+#   kubectl -n models create secret generic groq-credentials \
+#     --from-literal=GROQ_API_KEY='your-key-here'
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-groq
+spec:
+  ports:
+    - port: 8080
+      targetPort: 8080
+  selector:
+    app: llm-groq
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-groq
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-groq
+  template:
+    metadata:
+      labels:
+        app: llm-groq
+    spec:
+      serviceAccountName: llm-groq
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        # 101 = the `nginx` user in nginx-unprivileged.
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nginx
+          # Fully qualified: CRI-O may refuse short image names.
+          image: docker.io/nginxinc/nginx-unprivileged:1.30.4-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: groq-credentials
+                  key: GROQ_API_KEY
+            # Substitute only the key; leave nginx's own $variables alone.
+            - name: NGINX_ENVSUBST_FILTER
+              value: "^GROQ_API_KEY$"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 2
+            failureThreshold: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 15
+            failureThreshold: 4
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: templates
+              mountPath: /etc/nginx/templates
+              readOnly: true
+            # The entrypoint writes the rendered config here, and nginx keeps
+            # its pid file and temp files in /tmp.
+            - name: conf
+              mountPath: /etc/nginx/conf.d
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: templates
+          configMap:
+            name: llm-groq-nginx
+        - name: conf
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llm-groq
+# Identity only: no RBAC is granted and no token is mounted into the pod.
+automountServiceAccountToken: false

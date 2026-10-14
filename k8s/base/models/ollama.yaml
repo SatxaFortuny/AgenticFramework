@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+spec:
+  replicas: 1
+  # One GPU / one model server: a rolling update would need a second GPU and
+  # double the RAM while both pods exist, so stop the old one first.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      serviceAccountName: ollama
+      automountServiceAccountToken: false
+      # A generation can be mid-flight when the pod is stopped.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ollama
+          image: ollama/ollama:0.35.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 11434
+          env:
+            # One generation at a time bounds the KV cache (and so the RAM).
+            - name: OLLAMA_NUM_PARALLEL
+              value: "1"
+            # Chat model + embedding model stay loaded together.
+            - name: OLLAMA_MAX_LOADED_MODELS
+              value: "2"
+            # Avoid re-loading ~5 GB after every idle spell.
+            - name: OLLAMA_KEEP_ALIVE
+              value: "30m"
+          # Still root, deliberately: the existing volume is root-owned and
+          # on a hostPath-backed PVC fsGroup is not applied. Non-root is a
+          # follow-up once the volume ownership is sorted (k3s local-path or
+          # a chown init container). Everything else is locked down.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet:
+              path: /
+              port: 11434
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          # GPU-mode defaults. Machine-specific sizing is patched in by the
+          # overlays: overlays/dev runs on CPU (no GPU visible to minikube)
+          # and raises these; the prod overlay adds `nvidia.com/gpu: 1`
+          # under limits.
+          resources:
+            requests:
+              cpu: "1"
+              memory: 2Gi
+            limits:
+              memory: 4Gi
+          volumeMounts:
+            - name: ollama-storage
+              mountPath: /root/.ollama
+      volumes:
+        - name: ollama-storage
+          persistentVolumeClaim:
+            claimName: ollama-storage
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 15Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-local
+spec:
+  ports:
+    - port: 11434
+      targetPort: 11434
+  selector:
+    app: ollama
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ollama
+# Identity only: no RBAC is granted and no token is mounted into the pod.
+automountServiceAccountToken: false

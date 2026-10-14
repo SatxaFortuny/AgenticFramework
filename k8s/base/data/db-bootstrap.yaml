@@ -1,0 +1,147 @@
+# Creates the limited database roles. Idempotent: safe to re-run, and safe on
+# a database that already has tables (it transfers their ownership).
+#
+#   af_migrator  owns the schema; used only by the orchestrator's `migrate`
+#                init container (can run DDL)
+#   af_app       used by the running orchestrator; SELECT/INSERT/UPDATE/DELETE
+#                on the tables af_migrator creates, nothing else
+#   af_backup    read-only (pg_read_all_data); used by the backup CronJob
+#
+# Passwords come from a Secret created by hand. It must exist in BOTH the
+# `data` namespace (this Job sets all three passwords) and the `app` namespace
+# (the orchestrator logs in with MIGRATOR_PASSWORD and APP_PASSWORD, so the
+# `app` copy omits BACKUP_PASSWORD), with identical values. DB_NAME must match
+# the POSTGRES_DB in postgres-credentials. See the README for the commands:
+#
+#   kubectl -n data create secret generic db-role-credentials \
+#     --from-literal=DB_NAME=af \
+#     --from-literal=MIGRATOR_PASSWORD="$(openssl rand -base64 24)" \
+#     --from-literal=APP_PASSWORD="$(openssl rand -base64 24)" \
+#     --from-literal=BACKUP_PASSWORD="$(openssl rand -base64 24)"
+#
+# A Job's spec can't be edited once created. It deletes itself an hour after
+# finishing, so a later `kubectl apply` simply recreates (and re-runs) it. To
+# change it sooner: kubectl delete job db-bootstrap
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-bootstrap
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: db-bootstrap
+    spec:
+      serviceAccountName: db-bootstrap
+      restartPolicy: OnFailure
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: docker.io/library/postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PGHOST
+              value: "conversation-db"
+            - name: PGPORT
+              value: "5432"
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_DB
+            - name: MIGRATOR_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-role-credentials
+                  key: MIGRATOR_PASSWORD
+            - name: APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-role-credentials
+                  key: APP_PASSWORD
+            - name: BACKUP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-role-credentials
+                  key: BACKUP_PASSWORD
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              until pg_isready -q; do echo "waiting for postgres..."; sleep 2; done
+              psql -v ON_ERROR_STOP=1 \
+                -v dbname="$PGDATABASE" \
+                -v mig_pw="$MIGRATOR_PASSWORD" \
+                -v app_pw="$APP_PASSWORD" \
+                -v bak_pw="$BACKUP_PASSWORD" <<'SQL'
+              -- Roles (created only if missing), then (re)set their passwords.
+              SELECT 'CREATE ROLE af_migrator LOGIN'
+                WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'af_migrator') \gexec
+              SELECT 'CREATE ROLE af_app LOGIN'
+                WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'af_app') \gexec
+              SELECT 'CREATE ROLE af_backup LOGIN'
+                WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'af_backup') \gexec
+              ALTER ROLE af_migrator PASSWORD :'mig_pw';
+              ALTER ROLE af_app PASSWORD :'app_pw';
+              ALTER ROLE af_backup PASSWORD :'bak_pw';
+
+              -- Only these roles (and the superuser) may connect.
+              REVOKE CONNECT ON DATABASE :"dbname" FROM PUBLIC;
+              GRANT CONNECT ON DATABASE :"dbname" TO af_migrator, af_app, af_backup;
+              REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+              GRANT USAGE, CREATE ON SCHEMA public TO af_migrator;
+              GRANT USAGE ON SCHEMA public TO af_app, af_backup;
+              GRANT pg_read_all_data TO af_backup;
+
+              -- Tables created from now on by af_migrator are usable by af_app.
+              ALTER DEFAULT PRIVILEGES FOR ROLE af_migrator IN SCHEMA public
+                GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO af_app;
+              ALTER DEFAULT PRIVILEGES FOR ROLE af_migrator IN SCHEMA public
+                GRANT USAGE, SELECT ON SEQUENCES TO af_app;
+
+              -- Tables that already exist (created earlier by the superuser):
+              -- hand them to af_migrator so its migrations keep working, and
+              -- give af_app the same row access.
+              SELECT format('ALTER TABLE %I.%I OWNER TO af_migrator', schemaname, tablename)
+                FROM pg_tables
+                WHERE schemaname = 'public' AND tableowner <> 'af_migrator' \gexec
+              GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO af_app;
+              GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO af_app;
+              SQL
+              echo "roles ready"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: db-bootstrap
+# Identity only: no RBAC is granted and no token is mounted into the pod.
+automountServiceAccountToken: false

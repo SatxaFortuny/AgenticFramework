@@ -23,7 +23,8 @@ run pytest -m "not integration and not postgres" -q
 
 step "kubernetes manifests"
 if command -v kubeconform >/dev/null && command -v kubectl >/dev/null; then
-  kubectl kustomize . > /tmp/rendered.yaml && run kubeconform -strict -summary -ignore-missing-schemas /tmp/rendered.yaml
+  kubectl kustomize k8s/overlays/dev > /tmp/rendered.yaml && run kubeconform -strict -summary -ignore-missing-schemas /tmp/rendered.yaml
+  run python3 scripts/check-manifests.py < /tmp/rendered.yaml
 else
   echo "skipped: kubectl and/or kubeconform not installed"
 fi

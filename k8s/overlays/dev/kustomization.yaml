@@ -1,0 +1,13 @@
+# Local minikube (podman driver, CRI-O, 8 GB / 4 CPUs - see setup.sh).
+# Only values that depend on the machine live here; everything else,
+# security settings included, comes unchanged from the base.
+#
+#   kubectl apply -k k8s/overlays/dev
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - path: ollama-cpu.yaml

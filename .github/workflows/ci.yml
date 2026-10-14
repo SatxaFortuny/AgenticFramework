@@ -109,8 +109,13 @@ jobs:
 
       - name: Render and validate manifests
         run: |
-          kubectl kustomize . > rendered.yaml
+          kubectl kustomize k8s/overlays/dev > rendered.yaml
           kubeconform -strict -summary -ignore-missing-schemas rendered.yaml
+
+      - name: Check namespaces, ServiceAccounts, Pod Security and Service addresses
+        run: |
+          pip install pyyaml
+          python3 scripts/check-manifests.py < rendered.yaml
 
   build-images:
     runs-on: ubuntu-latest

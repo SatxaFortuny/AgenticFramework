@@ -10,11 +10,11 @@ story.
 
 **Symptom:**
 ```
-kubectl get pods
+kubectl get pods -n app
 orchestrator-xxxxx   0/1   CreateContainerError
 ```
 ```
-kubectl describe pod <pod-name>
+kubectl -n <namespace> describe pod <pod-name>
 ...
 Error: container create failed: creating `/app/configs/...`: openat2 ...: No such file or directory
 ```
@@ -28,7 +28,7 @@ exist inside the image.
 1. Check every ConfigMap/Secret volume's `items[].path` in the failing
    Deployment - none should contain a `/`. If one does, split it into a
    separate volume + separate `mountPath` per subdirectory instead (see
-   `k8s/05-orchestrator.yaml` for the pattern).
+   `k8s/base/app/orchestrator.yaml` for the pattern).
 2. Check the Dockerfile pre-creates every directory any volume in the
    manifest mounts onto (`RUN mkdir -p ...`). CRI-O mounts *onto* existing
    directories; it does not create them for you.
@@ -72,37 +72,46 @@ is always in the pod logs, never in the HTTP response, on purpose.
 
 **Fix:**
 ```bash
-kubectl logs -l app=orchestrator --tail=60
+kubectl -n app logs -l app=orchestrator --tail=60
 ```
 Look for the traceback right after `CRITICAL PIPELINE ERROR`. Common causes
 seen so far:
-- Missing/misnamed API key env var for a model provider (see next entry)
-- Ollama model not pulled yet (`kubectl exec -it deploy/ollama -- ollama list`)
+- The Groq gateway rejecting the key or unreachable (see next entry)
+- Ollama model not pulled yet (`kubectl -n models exec -it deploy/ollama -- ollama list`)
 - ChromaDB unreachable (only relevant for functionalities using
   `retrieve_context`)
 
 ---
 
-## `groq.GroqError: The api_key client option must be set ...`
+## Groq calls fail: `401`, `403`, connection error, or `llm-groq` not Ready
 
-**Symptom:** Traceback in orchestrator logs, this exact message, when a
-functionality using `provider: groq` builds its pipeline for the first time.
+The orchestrator does not hold the Groq key. It talks to the `llm-groq` nginx
+gateway in the `models` namespace (`GROQ_API_BASE`), which adds the real key
+and forwards to `api.groq.com`. The orchestrator's own `GROQ_API_KEY` is a
+placeholder, so `groq.GroqError: The api_key client option must be set` can no
+longer happen; look at the gateway instead.
 
-**Cause:** `GROQ_API_KEY` isn't set in the orchestrator pod's environment, or
-a `secretKeyRef` in the Deployment points at a Secret key name that doesn't
-match what the Secret actually contains (this fails silently at `kubectl
-apply` time - only surfaces at runtime).
+**Symptoms and causes:**
+- `401 Invalid API Key` in the orchestrator logs: the key in the `models`
+  namespace is wrong. (The key in `app` is irrelevant: there is none.)
+- `llm-groq` pod in `CreateContainerConfigError`: the Secret or its key name
+  is missing in the `models` namespace (Incident 3: this only surfaces when
+  the container is created, not at `kubectl apply`).
+- `llm-groq` in `CrashLoopBackOff` with `BIO_new_file() failed` or `cannot
+  load certificate`: the image has no CA bundle at the path in
+  `llm-groq.conf.template` (`proxy_ssl_trusted_certificate`).
+- `502`/`504` from the gateway: it cannot reach `api.groq.com` (no internet
+  from the node, or, once network policies exist, an egress rule is missing).
 
 **Fix:**
 ```bash
-# confirm the secret exists and check its actual key name(s)
-kubectl get secret groq-credentials -o jsonpath='{.data}' | python3 -m json.tool
+kubectl -n models logs deploy/llm-groq
+kubectl -n models get secret groq-credentials -o jsonpath='{.data}' | python3 -m json.tool   # key name must be GROQ_API_KEY
 
-# if missing or misnamed, recreate with the key name the manifest expects
-kubectl delete secret groq-credentials  # if it exists with the wrong key
-kubectl create secret generic groq-credentials --from-literal=GROQ_API_KEY='...'
-
-kubectl rollout restart deployment orchestrator
+# recreate with the key name the manifest expects
+kubectl -n models delete secret groq-credentials
+kubectl -n models create secret generic groq-credentials --from-literal=GROQ_API_KEY='...'
+kubectl -n models rollout restart deployment llm-groq
 ```
 
 Naming convention: use the provider-prefixed name (`GROQ_API_KEY`,
@@ -115,11 +124,39 @@ secret.
 
 ---
 
-## Pod stuck on an old ReplicaSet after `kubectl apply -k .`
+## `chromadb-0` in `CrashLoopBackOff`: `attempt to write a readonly database`
 
 **Symptom:**
 ```
-kubectl get pods
+kubectl -n data logs chromadb-0 --previous
+...
+Error creating Frontend Config: SqlxError(Database(SqliteError { code: 8,
+message: "attempt to write a readonly database" }))
+```
+The pod is `CrashLoopBackOff` and the startup probe reports `connection refused`.
+
+**Cause:** Chroma runs as UID 10001, but the PVC is owned by root. `fsGroup`
+is not applied on minikube's hostPath-backed volumes, so Chroma cannot write
+its SQLite file in `/chroma/chroma`. Typically the volume was first written
+by an earlier root-run deploy.
+
+**Fix:** the `fix-permissions` init container in
+`k8s/base/data/chromadb.yaml` chowns the volume to 10001 before Chroma starts
+(root only for that init container, minimal capabilities). If you ever see
+this on another non-root pod with a PVC, the same pattern applies. If the
+init container is present and it still fails, the on-disk data may be from
+an incompatible Chroma version; with no data you need to keep:
+```bash
+kubectl -n data delete pvc chroma-storage-chromadb-0
+```
+
+---
+
+## Pod stuck on an old ReplicaSet after `kubectl apply -k k8s/overlays/dev`
+
+**Symptom:**
+```
+kubectl get pods -n app
 orchestrator-aaaaaa   0/1   CreateContainerError   (new)
 orchestrator-bbbbbb   1/1   Running                (old, still there)
 ```
@@ -132,10 +169,10 @@ debugging a failing rollout.
 **Fix:** Either wait it out once the new pod is actually fixed (it'll
 converge on its own), or force a clean slate while iterating on a fix:
 ```bash
-kubectl delete -k .
-kubectl get pods            # confirm everything's gone
-kubectl apply -k .
-kubectl get pods -w
+kubectl delete -k k8s/overlays/dev
+kubectl get pods -A            # confirm everything's gone
+kubectl apply -k k8s/overlays/dev
+kubectl get pods -A -w
 ```
 
 ---
@@ -156,5 +193,5 @@ won't restart a Deployment whose spec text didn't change, even if the image
 steps manually instead of via the script:
 ```bash
 minikube image load <tarball> --overwrite
-kubectl rollout restart deployment <name>
+kubectl -n <namespace> rollout restart deployment <name>
 ```

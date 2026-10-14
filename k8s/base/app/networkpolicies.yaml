@@ -1,0 +1,84 @@
+# Network policies for the app zone (ADR 0006). Namespace comes from kustomization.yaml.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# DNS for everyone (every pod resolves the *.svc.cluster.local names in its env).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+# Who may call the orchestrator: the ingress controller only. Controller
+# namespaces: ingress-nginx (minikube addon), traefik, or k3s's bundled Traefik
+# (kube-system, matched by pod label so the rest of kube-system is excluded).
+# The dev NodePort (30080) arrives from the node itself; Calico always allows
+# node -> local pod traffic, so it should keep working (verify after applying).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orchestrator-ingress
+spec:
+  podSelector:
+    matchLabels: {app: orchestrator}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: traefik}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {app.kubernetes.io/name: traefik}}
+      ports:
+        - {protocol: TCP, port: 8000}
+---
+# The hub: the orchestrator calls each backend and nothing else. No internet:
+# Groq is reached through the llm-groq gateway (ADR 0005).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orchestrator-egress
+spec:
+  podSelector:
+    matchLabels: {app: orchestrator}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: data}}
+          podSelector: {matchLabels: {app: postgres}}
+      ports: [{protocol: TCP, port: 5432}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: data}}
+          podSelector: {matchLabels: {app: chromadb}}
+      ports: [{protocol: TCP, port: 8000}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: models}}
+          podSelector: {matchLabels: {app: ollama}}
+      ports: [{protocol: TCP, port: 11434}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: models}}
+          podSelector: {matchLabels: {app: llm-groq}}
+      ports: [{protocol: TCP, port: 8080}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: tools}}
+          podSelector: {matchLabels: {app: weather-mcp}}
+      ports: [{protocol: TCP, port: 8000}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: tools}}
+          podSelector: {matchLabels: {app: finance-mcp}}
+      ports: [{protocol: TCP, port: 8001}]

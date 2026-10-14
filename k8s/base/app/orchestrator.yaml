@@ -1,0 +1,225 @@
+# Database credentials are split by purpose (created by hand, see the README):
+# the migrate init container uses the schema-owning role, the running app uses
+# a role that can only read/write rows. Neither ever sees the Postgres
+# superuser, and the Groq API key is not in this namespace at all (it lives
+# only in the llm-groq gateway in `models`).
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator-service
+spec:
+  type: NodePort
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30080
+  selector:
+    app: orchestrator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orchestrator
+  template:
+    metadata:
+      labels:
+        app: orchestrator
+    spec:
+      serviceAccountName: orchestrator
+      automountServiceAccountToken: false
+      # LLM calls can take a while; give in-flight requests time to finish
+      # after SIGTERM (uvicorn drains open connections).
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Rebuilds the nested configs/ tree from the flat ConfigMap keys.
+        # A key such as "greeting_finance_app__functionalities__finance_bot.yaml"
+        # becomes /app/configs/greeting_finance_app/functionalities/finance_bot.yaml.
+        - name: build-config-tree
+          image: localhost/af-orchestrator:latest
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              for f in /cm/*; do
+                rel=$(basename "$f" | sed 's#__#/#g')
+                mkdir -p "/out/$(dirname "$rel")"
+                cp "$f" "/out/$rel"
+              done
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - { name: agent-configs, mountPath: /cm }
+            - { name: configs, mountPath: /out }
+        # Creates/upgrades the database schema before the app starts, as the
+        # schema-owning role. Serialised across replicas by a Postgres
+        # advisory lock (core/persistence.py), and waits for Postgres.
+        - name: migrate
+          image: localhost/af-orchestrator:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "migrate.py"]
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: HOME
+              value: /tmp
+            - name: PGHOST
+              value: "conversation-db.data.svc.cluster.local"
+            - name: PGPORT
+              value: "5432"
+            - name: PGUSER
+              value: "af_migrator"
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-role-credentials
+                  key: MIGRATOR_PASSWORD
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: db-role-credentials
+                  key: DB_NAME
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      containers:
+        - name: orchestrator
+          image: localhost/af-orchestrator:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: HOME
+              value: /tmp
+            # No outbound telemetry from the Chroma client.
+            - name: ANONYMIZED_TELEMETRY
+              value: "False"
+            - name: OLLAMA_HOST
+              value: "http://llm-local.models.svc.cluster.local:11434"
+            - name: CHROMA_HOST
+              value: "vector-store.data.svc.cluster.local"
+            - name: CHROMA_PORT
+              value: "8000"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: WEATHER_MCP_URL
+              value: "http://tool-weather.tools.svc.cluster.local:8000/sse"
+            - name: FINANCE_MCP_URL
+              value: "http://tool-finance.tools.svc.cluster.local:8001/sse"
+            # Runtime role: row access only (no DDL), which is why AUTO_MIGRATE
+            # is not set here - the init container above owns the schema.
+            - name: PGHOST
+              value: "conversation-db.data.svc.cluster.local"
+            - name: PGPORT
+              value: "5432"
+            - name: PGUSER
+              value: "af_app"
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-role-credentials
+                  key: APP_PASSWORD
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: db-role-credentials
+                  key: DB_NAME
+            # Groq is reached through the llm-groq gateway, which adds the
+            # real API key. langchain-groq reads the base URL from
+            # GROQ_API_BASE; it still insists on a key being set to construct
+            # the client, so this is a placeholder the gateway overwrites.
+            - name: GROQ_API_BASE
+              value: "http://llm-groq.models.svc.cluster.local:8080"
+            - name: GROQ_API_KEY
+              value: "placeholder-the-llm-groq-gateway-adds-the-real-key"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # Brief pause so the Service stops sending new requests before
+          # SIGTERM arrives.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          # No CPU limit on purpose: the app is I/O-bound with short spikes,
+          # and throttling would slow those spikes down for nothing. The CPU
+          # request still guarantees its share under contention.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - { name: configs, mountPath: /app/configs, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+          # /healthz = process is up (never touches the DB, so a database
+          # outage can't get pods restarted). /readyz = can reach Postgres;
+          # failing it just removes the pod from the Service until it recovers.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 3
+      volumes:
+        - name: agent-configs
+          configMap:
+            name: agent-configs
+        - name: configs
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: orchestrator
+# Identity only: no RBAC is granted and no token is mounted into the pod.
+automountServiceAccountToken: false

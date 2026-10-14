@@ -1,0 +1,6 @@
+# For the future k3s overlay (k3s bundles Traefik). Same Secrets as ingress-nginx
+# (the basicAuth secret key is "users"). Untested: there is no k3s machine yet.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ingressroute.yaml

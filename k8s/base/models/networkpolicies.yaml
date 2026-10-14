@@ -1,0 +1,77 @@
+# Network policies for the models zone (ADR 0006).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# DNS for everyone (every pod resolves the *.svc.cluster.local names in its env).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: models-ingress
+spec:
+  podSelector:
+    matchLabels: {app: ollama}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: app}}
+          podSelector: {matchLabels: {app: orchestrator}}
+      ports: [{protocol: TCP, port: 11434}]
+---
+# Whoever can reach the gateway can spend the Groq key (ADR 0005), so only
+# the orchestrator may.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llm-groq-ingress
+spec:
+  podSelector:
+    matchLabels: {app: llm-groq}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: app}}
+          podSelector: {matchLabels: {app: orchestrator}}
+      ports: [{protocol: TCP, port: 8080}]
+---
+# The gateway is the only pod with internet egress: TCP 443 to public
+# addresses. Open-source Calico cannot match on a hostname, so "only
+# api.groq.com" is enforced by the nginx config, not here. Private ranges are
+# excluded so the gateway cannot be used to pivot into the cluster or LAN.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llm-groq-egress
+spec:
+  podSelector:
+    matchLabels: {app: llm-groq}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+      ports: [{protocol: TCP, port: 443}]
+# ollama has no egress rule. To pull a model, apply k8s/optional/ollama-pull-egress.yaml
+# for the duration of the pull, then delete it.

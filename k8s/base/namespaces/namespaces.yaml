@@ -1,0 +1,47 @@
+# Four trust zones. Pod Security Admission is built into Kubernetes and needs
+# no extra component: `enforce` rejects pods that violate the profile, `warn`
+# and `audit` report against the stricter `restricted` profile so the gap in
+# the two baseline zones stays visible.
+#
+#   app     the orchestrator: the only workload that calls the others, and the
+#           one that feeds untrusted user text to an LLM
+#   data    postgres + chromadb. `baseline` because Chroma's fix-permissions
+#           init container runs as root (CHOWN/DAC_OVERRIDE/FOWNER)
+#   models  ollama + the llm-groq gateway. `baseline` because Ollama still runs
+#           as root (and the GPU device plugin will need it later)
+#   tools   the MCP servers: model-controlled code paths, so the strictest zone
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: data
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: models
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tools
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

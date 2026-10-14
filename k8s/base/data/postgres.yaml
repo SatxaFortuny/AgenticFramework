@@ -1,0 +1,144 @@
+# Postgres: the shared persistence layer for every orchestrator replica
+# (LangGraph checkpoints = message history, plus the session store).
+#
+# The credentials in `postgres-credentials` are the SUPERUSER. Only this pod
+# and the one-off bootstrap Job (db-bootstrap.yaml) ever see them; the
+# orchestrator connects with the limited roles that Job creates.
+#
+#   kubectl -n data create secret generic postgres-credentials \
+#     --from-literal=POSTGRES_USER=af \
+#     --from-literal=POSTGRES_PASSWORD='choose-a-password' \
+#     --from-literal=POSTGRES_DB=af
+apiVersion: v1
+kind: Service
+metadata:
+  name: conversation-db
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: "conversation-db"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      serviceAccountName: postgres
+      # Nothing in this pod talks to the Kubernetes API.
+      automountServiceAccountToken: false
+      # Time for a clean shutdown (checkpoint + WAL flush) before SIGKILL.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        # 70 = the `postgres` user in the *alpine* image (Debian-based
+        # images use 999). Change this if you change the image flavour.
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          # Fully qualified: CRI-O may refuse short image names.
+          image: docker.io/library/postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_DB
+            # Data goes in a subdirectory of the mount: a freshly provisioned
+            # volume root can contain lost+found, which makes initdb refuse
+            # to start ("directory exists but is not empty").
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # Startup: first boot runs initdb, which can take a while.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 2
+            failureThreshold: 30
+          # Readiness: drops the pod from the Service while it can't accept
+          # connections. Never restarts anything.
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 5
+            timeoutSeconds: 3
+          # Liveness is deliberately lenient: restarting a database triggers
+          # crash recovery, so only do it when it has been dead for a while.
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          # requests == limits (both CPU and memory) gives the pod the
+          # Guaranteed QoS class: it is the last thing evicted under pressure.
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+            # Needed because the root filesystem is read-only: the unix
+            # socket and lock file live here, and some tools write to /tmp.
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres
+# Identity only: no RBAC is granted and no token is mounted into the pod.
+automountServiceAccountToken: false

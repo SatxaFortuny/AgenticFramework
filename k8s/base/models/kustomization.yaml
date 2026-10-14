@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: models
+
+resources:
+  - ollama.yaml
+  - llm-groq.yaml
+  - networkpolicies.yaml
+
+# nginx's official image renders /etc/nginx/templates/*.template with envsubst
+# at start-up; that is how the API key gets into the config without being
+# stored in it. The hash suffix kustomize adds rolls the pod on every edit.
+configMapGenerator:
+  - name: llm-groq-nginx
+    files:
+      - default.conf.template=llm-groq.conf.template

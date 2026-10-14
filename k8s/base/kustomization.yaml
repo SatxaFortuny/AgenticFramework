@@ -1,0 +1,13 @@
+# Everything that must be identical in every environment, hardening included
+# (non-root, read-only root filesystem, dropped capabilities, probes).
+# Environment-specific values - sizes, CPU/GPU mode, storage - are patched
+# in by k8s/overlays/<env>, never edited here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - data
+  - models
+  - tools
+  - app
+  - namespaces
