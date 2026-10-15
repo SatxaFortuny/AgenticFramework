@@ -20,8 +20,6 @@ attrs==26.1.0
     #   referencing
 authlib==1.8.0
     # via fastmcp-slim
-backports-tarfile==1.2.0
-    # via jaraco-context
 beartype==0.22.9
     # via py-key-value-aio
 cachetools==7.2.1
@@ -54,7 +52,7 @@ exceptiongroup==1.3.1
     # via fastmcp-slim
 fastmcp==3.4.8
     # via -r requirements.in
-fastmcp-slim==3.4.8
+fastmcp-slim[client,server]==3.4.8
     # via fastmcp
 griffelib==2.3.2
     # via fastmcp-slim
@@ -75,8 +73,6 @@ idna==3.20
     #   anyio
     #   email-validator
     #   httpx
-importlib-metadata==9.0.1
-    # via keyring
 jaraco-classes==3.4.0
     # via keyring
 jaraco-context==6.1.2
@@ -123,17 +119,17 @@ pathable==0.6.0
     # via jsonschema-path
 platformdirs==4.12.3
     # via fastmcp-slim
-py-key-value-aio==0.4.6
+py-key-value-aio[filetree,keyring,memory]==0.4.6
     # via fastmcp-slim
 pycparser==3.0
     # via cffi
-pydantic==2.13.5
+pydantic[email]==2.14.1
     # via
     #   fastmcp-slim
     #   mcp
     #   openapi-pydantic
     #   pydantic-settings
-pydantic-core==2.46.5
+pydantic-core==2.50.1
     # via pydantic
 pydantic-settings==2.15.0
     # via
@@ -143,7 +139,7 @@ pygments==2.21.0
     # via
     #   rich
     #   rich-rst
-pyjwt==2.15.1
+pyjwt[crypto]==2.15.1
     # via mcp
 pyperclip==1.11.0
     # via fastmcp-slim
@@ -188,15 +184,12 @@ starlette==1.7.0
 typing-extensions==4.16.0
     # via
     #   anyio
-    #   exceptiongroup
     #   fastmcp-slim
     #   mcp
     #   opentelemetry-api
     #   py-key-value-aio
     #   pydantic
     #   pydantic-core
-    #   referencing
-    #   starlette
     #   typing-inspection
 typing-inspection==0.4.4
     # via
@@ -214,5 +207,3 @@ watchfiles==1.3.0
     # via fastmcp-slim
 websockets==17.2
     # via fastmcp-slim
-zipp==4.1.1
-    # via importlib-metadata
